@@ -2,14 +2,14 @@ import math
 
 import tilelang
 from tilelang.ascend import language as T
-from tilelang.ascend.language import simd as S
+from tilelang.ascend.language import vmi as V
 
 from tile_kernels.config import get_max_ub_per_vector_core
 from tile_kernels.quant.common import CastInputConfig, get_packed_ue8m0_pack_factor, get_sf_shape
 from tile_kernels.utils import align, ceil_div
 
 
-@tilelang.jit()
+@tilelang.jit(target='pto', pass_configs={tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True})
 def get_cast_back_kernel_asc(
     hidden: int,
     in_config: CastInputConfig,
@@ -59,6 +59,7 @@ def get_cast_back_kernel_asc(
     sf_ub_shape = (num_sf_cols, num_sf_rows) if keep_unpacked_col_major else (num_sf_rows, num_sf_cols)
     if not in_config.use_packed_ue8m0:
         sf_ub_shape = (sf_ub_shape[0], align(sf_ub_shape[1], 32 // in_config.sf_dtype.bytes))
+    num_sf_rows_padded = sf_ub_shape[1]
 
     @T.macro
     def load_scale_tile(x_sf_raw, sf_raw_ub, sf_ub, token_base, channel_base):
@@ -74,107 +75,101 @@ def get_cast_back_kernel_asc(
             if use_e2b_scale:
                 assert num_sf_rows * num_sf_cols % 128 == 0
                 with T.SimdVF():
-                    lane_indices = T.reinterpret(S.vci(0, T.int16), 'uint16x128')
-                    byte_mask = S.vdup(0x00FF, T.uint16)
+                    mask = V.create_mask(128, size=128)
+                    lanes = V.vinterpret_cast(V.vci(T.int16(0), size=128), 'uint16')
+                    byte_mask = V.vbrc(T.uint16(0xFF), size=128)
                     for output_vector in T.serial(num_sf_rows * num_sf_cols // 128):
-                        output_base = output_vector * 128
-                        output_indices = S.vadds(lane_indices, output_base)
-                        output_rows = T.reinterpret(S.vshrs(output_indices, int(math.log2(num_sf_cols))), 'uint16x128')
-                        output_cols = S.vand(output_indices, S.vdup(num_sf_cols - 1, T.uint16))
-                        packed_channel = S.vshrs(output_cols, 1)
-                        byte_indices = S.vand(output_cols, S.vdup(1, T.uint16))
+                        base = output_vector * 128
+                        idx = V.vadds(lanes, base, mask)
+                        rows = V.vshrs(idx, int(math.log2(num_sf_cols)), mask)
+                        cols = V.vand(idx, V.vbrc(T.uint16(num_sf_cols - 1), size=128))
+                        packed_channel = V.vshrs(cols, 1, mask)
+                        byte_index = V.vand(cols, V.vbrc(T.uint16(1), size=128))
                         if in_config.use_tma_aligned_col_major_sf:
-                            source_rows, source_cols = packed_channel, output_rows
+                            src_rows, src_cols = packed_channel, rows
                         else:
-                            source_rows, source_cols = output_rows, packed_channel
-                        source_indices = S.vadd(S.vmuls(source_rows, sf_raw_cols), source_cols)
-                        packed = S.vgather2(sf_raw_ub[0, 0], source_indices)
-                        shifts = T.reinterpret(S.vmuls(byte_indices, 8), 'int16x128')
-                        exponents = S.vand(S.vshr(packed, shifts), byte_mask)
-                        scales = T.reinterpret(S.vshls(exponents, 7), 'bfloat16x128')
-                        S.vsts(sf_ub[output_base // num_sf_cols, output_base % num_sf_cols], scales, dist='NORM_B16')
+                            src_rows, src_cols = rows, packed_channel
+                        src_idx = V.vadd(V.vmuls(src_rows, sf_raw_cols, mask), src_cols)
+                        raw = V.vgather(sf_raw_ub[0, 0], src_idx, mask)
+                        low_exp = V.vand(raw, byte_mask)
+                        exp = V.vsel(V.vcmp(byte_index, V.vbrc(T.uint16(0), size=128), mask, 'eq'), low_exp, V.vshrs(raw, 8, mask))
+                        V.vstore(V.vinterpret_cast(V.vshls(exp, 7, mask), 'bfloat16'), sf_ub[base // num_sf_cols, base % num_sf_cols])
             elif num_per_channels == 1:
                 with T.SimdVF():
-                    sf_exp_mask = S.vdup(0x7F800000, T.uint32)
+                    mask = V.create_mask(64, size=64)
+                    byte_mask = V.vbrc(T.uint16(0xFF), size=64)
                     for group in T.serial(num_sf_rows):
                         packed_index = group + token_base % pack_factor
-                        shift = 23 - packed_index % pack_factor * 8
+                        shift = packed_index % pack_factor * 8
                         for chunk in T.serial(num_sf_cols // 64):
                             col = chunk * 64
-                            packed = S.vld(sf_raw_ub[packed_index // pack_factor, col], dist='US_B16')
-                            packed_u32 = T.reinterpret(packed, 'uint32x64')
-                            scales = T.reinterpret(S.vand(S.vshls(packed_u32, shift), sf_exp_mask), 'float32x64')
-                            S.vsts(sf_ub[group, col], scales)
+                            raw = V.vload(sf_raw_ub[packed_index // pack_factor, col], size=64)
+                            exp = V.vand(V.vshrs(raw, shift, mask), byte_mask)
+                            V.vstore(V.vcvt(V.vinterpret_cast(V.vshls(exp, 7, mask), 'bfloat16'), 'float32'), sf_ub[group, col])
         else:
             T.copy(source, sf_ub)
 
     @T.macro
-    def load_scale(sf_ub, group, col, mask_low_f32, sf_shift, sf_exp_mask):
+    def load_scale(sf_ub, group, col, size, sf_shift=None, sf_exp_mask=None):
         if use_lazy_packed_scale:
-            packed = (
-                S.vld(sf_ub[col // 64, group], dist='BRC_B16')
-                if in_config.use_tma_aligned_col_major_sf
-                else S.vld(sf_ub[group, col // 64], dist='BRC_B16')
-            )
-            packed_u32 = T.reinterpret(packed, 'uint32x64')
-            return T.reinterpret(S.vand(S.vshl(packed_u32, sf_shift), sf_exp_mask), 'float32x64')
+            if in_config.use_tma_aligned_col_major_sf:
+                packed_v = V.vload(sf_ub[col // 64, group], size=size * 2, stride=sf_raw_cols, dist_mode='brc', group=size // 64)
+            else:
+                packed_v = V.vload(sf_ub[group, col // 64], size=size * 2, stride=1, dist_mode='brc', group=size // 64)
+            packed_u = V.vinterpret_cast(packed_v, 'uint32')
+            return V.vinterpret_cast(V.vand(V.vshl(packed_u, sf_shift), sf_exp_mask), 'float32')
         if num_per_channels == 1:
-            return S.vld(sf_ub[group, col])
+            return V.vload(sf_ub[group, col], size=size)
         if keep_unpacked_col_major:
-            scale_low = S.vld(sf_ub[col // 32, group], dist='BRC_B32')
-            scale_high = S.vld(sf_ub[col // 32 + 1, group], dist='BRC_B32')
-        else:
-            scale_low = S.vld(sf_ub[group, col // 32], dist='BRC_B32')
-            scale_high = S.vld(sf_ub[group, col // 32 + 1], dist='BRC_B32')
-        return S.vsel(scale_low, scale_high, mask_low_f32)
+            return V.vload(sf_ub[col // 32, group], size=size, stride=num_sf_rows_padded, dist_mode='brc', group=size // 32)
+        return V.vload(sf_ub[group, col // 32], size=size, stride=1, dist_mode='brc', group=size // 32)
 
     @T.macro
     def store_out(out_ub, row, col, out_f32):
         if out_dtype == T.float32:
-            S.vsts(out_ub[row, col], out_f32)
+            V.vstore(out_f32, out_ub[row, col])
         else:
-            out_bf16 = S.vcvt(out_f32, T.bfloat16)
-            S.vsts(out_ub[row, col], out_bf16, dist='PK_B32')
+            V.vstore(V.vcvt(out_f32, 'bfloat16'), out_ub[row, col])
+
+    @T.macro
+    def lazy_scale_args(size):
+        return (
+            V.vbrc(T.uint32(0x7F800000), size=size) if use_lazy_packed_scale else None,
+            V.vsel(
+                V.create_mask(32, size=size, group=size // 64),
+                V.vbrc(T.uint32(23), size=size),
+                V.vbrc(T.uint32(15), size=size),
+            )
+            if use_lazy_packed_scale and num_per_channels == 32
+            else None,
+        )
 
     @T.macro
     def transform_tile(x_ub, sf_ub, out_ub):
         with T.SimdVF():
-            mask_low_f32 = S.pset(32, 'PAT_VL32') if num_per_channels == 32 else None
-            sf_shift = S.vsel(S.vdup(23, T.int32), S.vdup(15, T.int32), mask_low_f32) if use_lazy_packed_scale and num_per_channels == 32 else None
-            sf_exp_mask = S.vdup(0x7F800000, T.uint32) if use_lazy_packed_scale else None
             if use_e2b_scale:
                 for row in T.serial(block_m):
                     for chunk in T.serial(block_k // 256):
                         col = chunk * 256
-                        scale_e2b = S.vld(sf_ub[row, chunk * 8], dist='E2B_B16')
-                        scale_low, scale_high = S.vintlv(scale_e2b, scale_e2b)
-                        x_low = S.vcvt(S.vld(x_ub[row, col], dist='UNPK4_B8'), T.bfloat16)
-                        x_high = S.vcvt(S.vld(x_ub[row, col + 128], dist='UNPK4_B8'), T.bfloat16)
-                        S.vsts(out_ub[row, col], S.vmul(x_low, scale_low), dist='NORM_B16')
-                        S.vsts(out_ub[row, col + 128], S.vmul(x_high, scale_high), dist='NORM_B16')
-            elif in_config.dtype == T.float4_e2m1fn:
-                zero_bf16 = S.vdup(0.0, T.bfloat16)
-                for group in T.serial(num_sf_rows):
-                    row_base = group * num_per_tokens
-                    for chunk in T.serial(block_k // 128):
-                        col = chunk * 128
-                        scale_low = load_scale(sf_ub, group, col, mask_low_f32, sf_shift, sf_exp_mask)
-                        scale_high = load_scale(sf_ub, group, col + 64, mask_low_f32, sf_shift, sf_exp_mask)
-                        for row in T.serial(num_per_tokens):
-                            x_raw = S.vld(x_ub[row_base + row, col], dist='UNPK4_B8')
-                            x_bf16 = S.vcvt(x_raw, T.bfloat16)
-                            x_uint_low, x_uint_high = S.vintlv(zero_bf16, x_bf16)
-                            store_out(out_ub, row_base + row, col, S.vmul(T.reinterpret(x_uint_low, 'float32x64'), scale_low))
-                            store_out(out_ub, row_base + row, col + 64, S.vmul(T.reinterpret(x_uint_high, 'float32x64'), scale_high))
+                        scale256 = V.vload(sf_ub[row, chunk * 8], size=256, stride=1, dist_mode='brc', group=8)
+                        V.vstore(V.vmul(V.vcvt(V.vload(x_ub[row, col], size=256), 'bfloat16'), scale256), out_ub[row, col])
             else:
+                scale_size = 128 if in_config.dtype == T.float4_e2m1fn else 64
+                zero_bf16 = V.vbrc(T.bfloat16(0.0), size=scale_size)
+                sf_exp_mask, sf_shift = lazy_scale_args(scale_size)
                 for group in T.serial(num_sf_rows):
                     row_base = group * num_per_tokens
-                    for chunk in T.serial(block_k // 64):
-                        col = chunk * 64
-                        scale = load_scale(sf_ub, group, col, mask_low_f32, sf_shift, sf_exp_mask)
+                    for chunk in T.serial(block_k // scale_size):
+                        col = chunk * scale_size
+                        scale = load_scale(sf_ub, group, col, scale_size, sf_shift, sf_exp_mask)
                         for row in T.serial(num_per_tokens):
-                            x_raw = S.vld(x_ub[row_base + row, col], dist='UNPK4_B8')
-                            store_out(out_ub, row_base + row, col, S.vmul(S.vcvt(x_raw, T.float32), scale))
+                            raw = V.vload(x_ub[row_base + row, col], size=scale_size)
+                            x_f32 = (
+                                V.vzip(zero_bf16, V.vcvt(raw, 'bfloat16'), 'float32')
+                                if in_config.dtype == T.float4_e2m1fn
+                                else V.vcvt(raw, 'float32')
+                            )
+                            store_out(out_ub, row_base + row, col, V.vmul(x_f32, scale))
 
     @T.prim_func
     def cast_back_kernel_ascend(

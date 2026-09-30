@@ -2,13 +2,13 @@ import math
 
 import tilelang
 from tilelang.ascend import language as T
-from tilelang.ascend.language import simd as S
+from tilelang.ascend.language import vmi as V
 
 from tile_kernels.quant.common import CastInputConfig, CastOutputConfig, get_packed_ue8m0_pack_factor, get_sf_shape
 from tile_kernels.utils import align
 
 
-@tilelang.jit
+@tilelang.jit(target='pto')
 def get_per_token_cast_kernel_asc(
     hidden: int,
     token_stride: int,
@@ -57,210 +57,165 @@ def get_per_token_cast_kernel_asc(
     x_sf_shape = get_sf_shape((num_tokens, hidden), in_config) if in_config.with_sf else (1, 1)
 
     @T.macro
-    def compute_scale(amax):
-        clamped = S.vmaxs(amax, out_config.clamp_min_value)
+    def compute_scale(amax, lanes):
+        mask = V.create_mask(lanes, size=lanes)
+        clamped = V.vmax(amax, V.vbrc(T.float32(out_config.clamp_min_value), size=lanes))
         if not out_config.round_sf:
-            max_value = S.vdup(quant_max, T.float32)
-            return S.vdiv(clamped, max_value), S.vdiv(max_value, clamped)
-        bits = T.reinterpret(S.vmuls(clamped, inv_quant_max), 'uint32x64')
-        exponent = S.vadds(S.vshrs(S.vsub(bits, S.vdup(1, T.uint32)), 23), 1)
-        inverse = T.reinterpret(S.vshls(S.vsub(S.vdup(254, T.uint32), exponent), 23), 'float32x64')
+            max_value = V.vbrc(T.float32(quant_max), size=lanes)
+            return V.vdiv(clamped, max_value, mask, precision='exact'), V.vdiv(max_value, clamped, mask, precision='exact')
+        one = V.vbrc(T.uint32(1), size=lanes)
+        shift = V.vbrc(T.uint32(23), size=lanes)
+        bits = V.vinterpret_cast(V.vmul(clamped, V.vbrc(T.float32(inv_quant_max), size=lanes)), 'uint32')
+        exponent = V.vadd(V.vshr(V.vsub(bits, one), shift), one)
+        inverse = V.vinterpret_cast(V.vshl(V.vsub(V.vbrc(T.uint32(254), size=lanes), exponent), shift), 'float32')
         if out_config.use_packed_ue8m0:
             return exponent, inverse
-        return T.reinterpret(S.vshls(exponent, 23), 'float32x64'), inverse
+        return V.vinterpret_cast(V.vshl(exponent, shift), 'float32'), inverse
 
     @T.macro
-    def load_packed_input_scale_pair(scales_ub, group, sf_shift, sf_exp_mask):
-        packed = S.vld(scales_ub[group // pack_factor], dist='BRC_B16')
-        packed_u32 = T.reinterpret(packed, 'uint32x64')
-        scale_bits = S.vand(S.vshl(packed_u32, sf_shift), sf_exp_mask)
-        return T.reinterpret(scale_bits, 'float32x64')
+    def f32_to_bf16_round_odd(x):
+        low, high = V.vunzip(x, 'uint16')
+        return V.vinterpret_cast(V.vor(high, V.vmin(low, V.vbrc(T.uint16(1), size=128))), 'bfloat16')
+
+    @T.macro
+    def load_packed_input_scale_bf16(scales_ub, group, sf_shift, sf_exp_mask):
+        packed = V.vload(scales_ub[group // pack_factor], size=256, dist_mode='brc', group=2, stride=1)
+        scale_bits = V.vand(V.vshl(V.vinterpret_cast(packed, 'uint32'), sf_shift), sf_exp_mask)
+        scale_u16 = V.vcvt(V.vshr(scale_bits, V.vbrc(T.uint32(16), size=128)), 'uint16', saturate='NOSAT')
+        return V.vinterpret_cast(scale_u16, 'bfloat16')
 
     @T.macro
     def init_transpose_indices(indices):
         with T.SimdVF():
             if out_config.use_packed_ue8m0:
-                lane = S.vci(0, T.int16)
-                output_row = S.vand(T.reinterpret(lane, 'uint16x128'), S.vdup(block_m - 1, T.uint16))
-                group_in_vector = T.reinterpret(S.vshrs(lane, log2_block_m), 'uint16x128')
-                source_indices = S.vadd(S.vmuls(output_row, sf_stride // pack_factor), group_in_vector)
-                S.vsts(indices[0], source_indices, dist='NORM_B16')
+                lane = V.vci(T.int16(0), size=128)
+                output_row = V.vand(V.vinterpret_cast(lane, 'uint16'), V.vbrc(T.uint16(block_m - 1), size=128))
+                group_in_vector = V.vinterpret_cast(V.vshr(lane, V.vbrc(T.int16(log2_block_m), size=128)), 'uint16')
+                V.vstore(V.vadd(V.vmul(output_row, V.vbrc(T.uint16(sf_stride // pack_factor), size=128)), group_in_vector), indices[0])
             else:
-                lane = S.vci(0, T.int32)
-                output_row = S.vand(T.reinterpret(lane, 'uint32x64'), S.vdup(block_m - 1, T.uint32))
-                group_in_vector = T.reinterpret(S.vshrs(lane, log2_block_m), 'uint32x64')
-                source_indices = S.vadd(S.vmuls(output_row, sf_stride), group_in_vector)
-                S.vsts(indices[0], source_indices, dist='NORM_B32')
+                lane = V.vci(T.int32(0), size=64)
+                output_row = V.vand(V.vinterpret_cast(lane, 'uint32'), V.vbrc(T.uint32(block_m - 1), size=64))
+                group_in_vector = V.vinterpret_cast(V.vshr(lane, V.vbrc(T.int32(log2_block_m), size=64)), 'uint32')
+                V.vstore(V.vadd(V.vmul(output_row, V.vbrc(T.uint32(sf_stride), size=64)), group_in_vector), indices[0])
 
     @T.macro
-    def transpose_vectors(src, dst, indices, vector_lanes, num_output_groups, store_dist):
+    def transpose_vectors(src, dst, indices, vector_lanes, num_output_groups):
         with T.SimdVF():
             groups_per_vector = vector_lanes // block_m
             num_output_values = num_output_groups * block_m
             num_full_vectors = num_output_values // vector_lanes
             num_tail_values = num_output_values % vector_lanes
-            source_indices = S.vld(indices[0])
-
+            source_indices = V.vload(indices[0], size=vector_lanes)
+            full_mask = V.create_mask(vector_lanes, size=vector_lanes)
             for output_vector in T.unroll(num_full_vectors, explicit=True):
                 full_group_base = output_vector * groups_per_vector
-                values = S.vgather2(src[0, full_group_base], source_indices)
-                S.vsts(dst[full_group_base, 0], values, dist=store_dist)
-
+                V.vstore(V.vgather(src[0, full_group_base], source_indices, full_mask), dst[full_group_base, 0])
             if num_tail_values > 0:
                 tail_group_base = num_full_vectors * groups_per_vector
-                tail_mask = S.pset(2048 // vector_lanes, f'PAT_VL{num_tail_values}')
-                values = S.vgather2(src[0, tail_group_base], source_indices, tail_mask)
-                S.vsts(dst[tail_group_base, 0], values, tail_mask, dist=store_dist, extent=num_tail_values)
+                tail_mask = V.create_mask(num_tail_values, size=vector_lanes)
+                V.vstore(V.vgather(src[0, tail_group_base], source_indices, tail_mask), dst[tail_group_base, 0], tail_mask)
 
     @T.macro
     def transpose_output_sf(src, dst, indices):
         if out_config.use_packed_ue8m0:
             src_u16 = T.Tensor((block_m, sf_stride // pack_factor), T.uint16, src.data)
             dst_u16 = T.Tensor((num_groups // pack_factor, block_m), T.uint16, dst.data)
-            transpose_vectors(src_u16, dst_u16, indices, 128, num_groups // pack_factor, 'NORM_B16')
+            transpose_vectors(src_u16, dst_u16, indices, 128, num_groups // pack_factor)
         else:
-            transpose_vectors(src, dst, indices, 64, num_groups, 'NORM_B32')
+            transpose_vectors(src, dst, indices, 64, num_groups)
 
     @T.macro
     def dequantize_input(x_ub, scales_ub, out_ub):
         with T.SimdVF():
-            mask_low = S.pset(32, 'PAT_VL32')
             if in_config.use_packed_ue8m0:
-                sf_shift = S.vsel(S.vdup(23, T.int32), S.vdup(15, T.int32), mask_low)
-                sf_exp_mask = S.vdup(0x7F800000, T.uint32)
+                mask_low = V.create_mask(32, size=128)
+                sf_shift = V.vsel(mask_low, V.vbrc(T.uint32(23), size=128), V.vbrc(T.uint32(15), size=128))
+                sf_exp_mask = V.vbrc(T.uint32(0x7F800000), size=128)
             for pair in T.serial(block_k // 128):
                 col = pair * 128
                 group = pair * 4
                 if in_config.use_packed_ue8m0:
-                    scale0 = load_packed_input_scale_pair(scales_ub, group, sf_shift, sf_exp_mask)
-                    scale1 = load_packed_input_scale_pair(scales_ub, group + 2, sf_shift, sf_exp_mask)
+                    scale = load_packed_input_scale_bf16(scales_ub, group, sf_shift, sf_exp_mask)
+                    if value_dtype != T.bfloat16:
+                        scale = V.vcvt(scale, 'float32')
                 else:
-                    scale0 = S.vsel(S.vld(scales_ub[group], dist='BRC_B32'), S.vld(scales_ub[group + 1], dist='BRC_B32'), mask_low)
-                    scale1 = S.vsel(S.vld(scales_ub[group + 2], dist='BRC_B32'), S.vld(scales_ub[group + 3], dist='BRC_B32'), mask_low)
-                if value_dtype == T.bfloat16:
-                    _, scale_bf16 = S.vdintlv(T.reinterpret(scale0, 'uint16x128'), T.reinterpret(scale1, 'uint16x128'))
-                    scale_bf16 = T.reinterpret(scale_bf16, 'bfloat16x128')
-                for row in T.serial(block_m):
+                    scale = V.vload(scales_ub[group], size=128, dist_mode='brc', group=4, stride=1)
                     if value_dtype == T.bfloat16:
-                        if in_config.dtype == T.float8_e4m3fn:
-                            x0 = S.vcvt(S.vld(x_ub[row, col], dist='UNPK4_B8'), T.float32)
-                            x1 = S.vcvt(S.vld(x_ub[row, col + 64], dist='UNPK4_B8'), T.float32)
-                            _, x_bf16 = S.vdintlv(T.reinterpret(x0, 'uint16x128'), T.reinterpret(x1, 'uint16x128'))
-                            x_bf16 = T.reinterpret(x_bf16, 'bfloat16x128')
-                        else:
-                            x_bf16 = S.vcvt(S.vld(x_ub[row, col], dist='UNPK4_B8'), T.bfloat16)
-                        S.vsts(out_ub[row, col], S.vmul(x_bf16, scale_bf16), dist='NORM_B16')
+                        scale = V.vcvt(scale, 'bfloat16')
+                for row in T.serial(block_m):
+                    raw = V.vload(x_ub[row, col], size=128)
+                    if value_dtype == T.bfloat16:
+                        values = V.vcvt(V.vcvt(raw, 'float32'), 'bfloat16') if in_config.dtype == T.float8_e4m3fn else V.vcvt(raw, 'bfloat16')
                     else:
-                        if in_config.dtype == T.float8_e4m3fn:
-                            x0 = S.vcvt(S.vld(x_ub[row, col], dist='UNPK4_B8'), T.float32)
-                            x1 = S.vcvt(S.vld(x_ub[row, col + 64], dist='UNPK4_B8'), T.float32)
-                        else:
-                            packed = S.vld(x_ub[row, col], dist='UNPK4_B8')
-                            x_bf16 = S.vcvt(packed, T.bfloat16)
-                            even = S.vcvt(x_bf16, T.float32, part=0)
-                            odd = S.vcvt(x_bf16, T.float32, part=1)
-                            x0, x1 = S.vintlv(even, odd)
-                        S.vsts(out_ub[row, col], S.vmul(x0, scale0))
-                        S.vsts(out_ub[row, col + 64], S.vmul(x1, scale1))
+                        values = V.vcvt(raw, 'float32') if in_config.dtype == T.float8_e4m3fn else V.vcvt(V.vcvt(raw, 'bfloat16'), 'float32')
+                    V.vstore(V.vmul(values, scale), out_ub[row, col])
 
     @T.macro
     def quantize_bf16(x_ub, amax_ub, sf_inv_ub, sf_dense_ub, out_ub):
         with T.SimdVF():
-            mask_vl8 = S.pset(32, 'PAT_VL8')
-            abs_mask = S.vdup(0x7FFF, T.uint16)
-            zero = S.vdup(0.0, T.bfloat16)
+            mask256 = V.create_mask(256, size=256)
+            abs_mask = V.vbrc(T.uint16(0x7FFF), size=256)
             for row in T.serial(block_m):
-                for tile in T.serial(block_k // 256):
-                    x0, x1 = S.vld2(x_ub[row, tile * 256], dist='DINTLV_B16')
-                    abs_x0 = S.vand(T.reinterpret(x0, 'uint16x128'), abs_mask)
-                    abs_x1 = S.vand(T.reinterpret(x1, 'uint16x128'), abs_mask)
-                    maxima = S.vcgmax(S.vmax(abs_x0, abs_x1))
-                    dense, _ = S.vintlv(zero, T.reinterpret(maxima, 'bfloat16x128'))
-                    S.vsts(amax_ub[row, tile * 8], T.reinterpret(dense, 'float32x64'), mask_vl8, dist='NORM_B32', extent=8)
-            S.mem_bar('VST_VLD')
+                for tile in T.unroll(block_k // 256, explicit=True):
+                    col = tile * 256
+                    amax_u = V.vcmax(V.vand(V.vinterpret_cast(V.vload(x_ub[row, col], size=256), 'uint16'), abs_mask), mask256, group=8)
+                    V.vstore(V.vcvt(V.vinterpret_cast(amax_u, 'bfloat16'), 'float32'), amax_ub[row, tile * 8], group=8, stride=1)
+            T.simd.mem_bar('VST_VLD')
             for row in T.serial(block_m):
-                scale, inverse = compute_scale(S.vld(amax_ub[row, 0]))
-                S.vsts(sf_dense_ub[row, 0], T.reinterpret(scale, 'uint8x256'), dist='PK4_B32')
-                S.vsts(sf_inv_ub[row, 0], S.vcvt(inverse, T.bfloat16), dist='PK_B32')
+                scale, inverse = compute_scale(V.vload(amax_ub[row, 0], size=64), 64)
+                V.vstore(V.vcvt(scale, 'uint8'), sf_dense_ub[row, 0])
+                V.vstore(V.vcvt(inverse, 'bfloat16'), sf_inv_ub[row, 0])
             if not sf_only:
-                S.mem_bar('VST_VLD')
+                T.simd.mem_bar('VST_VLD')
                 for row in T.serial(block_m):
                     for tile in T.serial(block_k // 256):
                         col = tile * 256
-                        x0, x1 = S.vld2(x_ub[row, col], dist='DINTLV_B16')
-                        inverse = S.vld(sf_inv_ub[row, tile * 8], dist='E2B_B16')
-                        quantized0 = S.vmul(x0, inverse)
-                        quantized1 = S.vmul(x1, inverse)
+                        inverse = V.vload(sf_inv_ub[row, tile * 8], size=256, dist_mode='brc', group=8, stride=1)
+                        values = V.vmul(V.vload(x_ub[row, col], size=256), inverse)
                         if out_config.dtype == T.float4_e2m1fn:
-                            c0, c1 = S.vintlv(quantized0, quantized1)
-                            S.vsts(out_ub[row, col], S.vcvt(c0, T.float4_e2m1fn), dist='PK4_B32')
-                            S.vsts(out_ub[row, col + 128], S.vcvt(c1, T.float4_e2m1fn), dist='PK4_B32')
+                            V.vstore(V.vcvt(values, 'float4_e2m1fn', rounding='R'), out_ub[row, col])
                         else:
-                            quantized_fp8_0 = S.vcvt(S.vcvt(quantized0, T.float32, part=0), T.float8_e4m3fn, part=0)
-                            quantized_fp8_2 = S.vcvt(S.vcvt(quantized0, T.float32, part=1), T.float8_e4m3fn, part=2)
-                            quantized_fp8_1 = S.vcvt(S.vcvt(quantized1, T.float32, part=0), T.float8_e4m3fn, part=1)
-                            quantized_fp8_3 = S.vcvt(S.vcvt(quantized1, T.float32, part=1), T.float8_e4m3fn, part=3)
-                            merged = S.vor(
-                                S.vor(T.reinterpret(quantized_fp8_0, 'uint8x256'), T.reinterpret(quantized_fp8_2, 'uint8x256')),
-                                S.vor(T.reinterpret(quantized_fp8_1, 'uint8x256'), T.reinterpret(quantized_fp8_3, 'uint8x256')),
-                            )
-                            S.vsts(out_ub[row, col], T.reinterpret(merged, 'float8_e4m3fnx256'), dist='NORM_B8')
+                            V.vstore(V.vcvt(V.vcvt(values, 'float32'), 'float8_e4m3fn', rounding='R', saturate='SAT'), out_ub[row, col])
 
     @T.macro
     def load_f32_pair(x_ub, row, col):
         if in_config.dtype == T.bfloat16:
-            return S.vcvt(S.vld(x_ub[row, col], dist='UNPK_B16'), T.float32), S.vcvt(S.vld(x_ub[row, col + 64], dist='UNPK_B16'), T.float32)
-        return S.vld(x_ub[row, col]), S.vld(x_ub[row, col + 64])
+            return V.vcvt(V.vload(x_ub[row, col], size=128), 'float32')
+        return V.vload(x_ub[row, col], size=128)
 
     @T.macro
     def quantize_f32(x_ub, amax_ub, sf_inv_ub, sf_dense_ub, out_ub):
         with T.SimdVF():
-            mask_low = S.pset(32, 'PAT_VL32')
+            mask64 = V.create_mask(64, size=64)
+            mask128 = V.create_mask(128, size=128)
             if cast_only:
-                one = S.vdup(1.0, T.float32)
+                one = V.vbrc(T.float32(1.0), size=64)
                 for row in T.serial(block_m):
-                    S.vsts(sf_inv_ub[row, 0], S.vdiv(one, S.vld(sf_dense_ub[row, 0])))
+                    V.vstore(V.vdiv(one, V.vload(sf_dense_ub[row, 0], size=64), mask64, precision='exact'), sf_inv_ub[row, 0])
             else:
-                mask_all = S.pset(32, 'PAT_ALL')
-                mask_high = S.pnot(mask_low, mask_all)
                 for row in T.serial(block_m):
                     for pair in T.serial(block_k // 128):
                         col = pair * 128
-                        x0, x1 = load_f32_pair(x_ub, row, col)
-                        group = pair * 4
-                        abs_x0, abs_x1 = S.vabs(x0), S.vabs(x1)
-                        S.vsts(amax_ub[row, group], S.vcmax(abs_x0, mask_low), dist='ONEPT_B32')
-                        S.vsts(amax_ub[row, group + 1], S.vcmax(abs_x0, mask_high), dist='ONEPT_B32')
-                        S.vsts(amax_ub[row, group + 2], S.vcmax(abs_x1, mask_low), dist='ONEPT_B32')
-                        S.vsts(amax_ub[row, group + 3], S.vcmax(abs_x1, mask_high), dist='ONEPT_B32')
-                S.mem_bar('VST_VLD')
+                        V.vstore(V.vcmax(V.vabs(load_f32_pair(x_ub, row, col)), mask128, group=4), amax_ub[row, pair * 4])
+                T.simd.mem_bar('VST_VLD')
                 for row in T.serial(block_m):
-                    scale, inverse = compute_scale(S.vld(amax_ub[row, 0]))
-                    S.vsts(sf_inv_ub[row, 0], inverse)
+                    scale, inverse = compute_scale(V.vload(amax_ub[row, 0], size=64), 64)
                     if out_config.use_packed_ue8m0:
-                        S.vsts(sf_dense_ub[row, 0], T.reinterpret(scale, 'uint8x256'), dist='PK4_B32')
+                        V.vstore(V.vcvt(scale, 'uint8'), sf_dense_ub[row, 0])
                     else:
-                        S.vsts(sf_dense_ub[row, 0], scale)
+                        V.vstore(scale, sf_dense_ub[row, 0])
+                    V.vstore(inverse, sf_inv_ub[row, 0])
             if not sf_only:
-                S.mem_bar('VST_VLD')
+                T.simd.mem_bar('VST_VLD')
                 for row in T.serial(block_m):
                     for pair in T.serial(block_k // 128):
                         col = pair * 128
-                        group = pair * 4
-                        sf_inv0 = S.vld(sf_inv_ub[row, group], dist='BRC_B32')
-                        sf_inv1 = S.vld(sf_inv_ub[row, group + 1], dist='BRC_B32')
-                        sf_inv2 = S.vld(sf_inv_ub[row, group + 2], dist='BRC_B32')
-                        sf_inv3 = S.vld(sf_inv_ub[row, group + 3], dist='BRC_B32')
-                        x0, x1 = load_f32_pair(x_ub, row, col)
-                        quantized0 = S.vmul(x0, S.vsel(sf_inv0, sf_inv1, mask_low))
-                        quantized1 = S.vmul(x1, S.vsel(sf_inv2, sf_inv3, mask_low))
+                        inverse = V.vload(sf_inv_ub[row, pair * 4], size=128, dist_mode='brc', group=4, stride=1)
+                        quantized = V.vmul(load_f32_pair(x_ub, row, col), inverse)
                         if out_config.dtype == T.float4_e2m1fn:
-                            low, high = S.vdintlv(T.reinterpret(quantized0, 'uint16x128'), T.reinterpret(quantized1, 'uint16x128'))
-                            packed = T.reinterpret(S.vor(high, S.vmins(low, 1)), 'bfloat16x128')
-                            S.vsts(out_ub[row, col], S.vcvt(packed, T.float4_e2m1fn), dist='PK4_B32')
+                            V.vstore(V.vcvt(f32_to_bf16_round_odd(quantized), 'float4_e2m1fn', rounding='R'), out_ub[row, col])
                         else:
-                            S.vsts(out_ub[row, col], S.vcvt(quantized0, T.float8_e4m3fn), dist='PK4_B32')
-                            S.vsts(out_ub[row, col + 64], S.vcvt(quantized1, T.float8_e4m3fn), dist='PK4_B32')
+                            V.vstore(V.vcvt(quantized, 'float8_e4m3fn', rounding='R', saturate='SAT'), out_ub[row, col])
 
     @T.prim_func
     def per_token_cast_kernel(
