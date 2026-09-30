@@ -6,11 +6,11 @@ from tile_kernels.quant.common import *
 
 # Re-bind below the star import: tile_kernels.quant.common exports its own `T`.
 from tilelang.ascend import language as T
-from tilelang.ascend.language import simd as S
+from tilelang.ascend.language import vmi as V
 from tile_kernels.quant.common import get_packed_ue8m0_pack_factor
 
 
-@tilelang.jit
+@tilelang.jit(target='pto', pass_configs={tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True})
 def get_per_channel_cast_kernel_asc(
     hidden: int,
     in_config: CastInputConfig,
@@ -82,67 +82,61 @@ def get_per_channel_cast_kernel_asc(
         dequant_ub_dtype = T.bfloat16 if use_bf16_compute else T.float32
 
     @T.macro
-    def compute_sf_and_inv(amax):
-        clamped_amax = S.vmax(amax, S.vdup(out_config.clamp_min_value, T.float32))
+    def compute_sf_and_inv(amax, clamp_v, qmax_v, inv_q, u1, u254, mask):
+        clamped_amax = V.vmax(amax, clamp_v)
         if not out_config.round_sf:
-            sf = S.vdiv(clamped_amax, S.vdup(quant_max, T.float32))
-            sf_inv = S.vdiv(S.vdup(quant_max, T.float32), clamped_amax)
-            return sf, sf_inv
-        raw_sf = S.vmul(clamped_amax, S.vdup(1.0 / quant_max, T.float32))
-        raw_sf_bits = T.reinterpret(raw_sf, 'uint32x64')
-        sf_exponent = S.vadds(S.vshrs(S.vsub(raw_sf_bits, S.vdup(1, T.uint32)), 23), 1)
-        sf_inv_exponent = S.vsub(S.vdup(254, T.uint32), sf_exponent)
-        sf_inv = T.reinterpret(S.vshls(sf_inv_exponent, 23), 'float32x64')
+            return V.vdiv(clamped_amax, qmax_v, mask, precision='exact'), V.vdiv(qmax_v, clamped_amax, mask, precision='exact')
+        raw_sf_bits = V.vinterpret_cast(V.vmul(clamped_amax, inv_q), 'uint32')
+        sf_exponent = V.vadds(V.vshrs(V.vsub(raw_sf_bits, u1), 23, mask), T.uint32(1), mask)
+        sf_inv = V.vinterpret_cast(V.vshls(V.vsub(u254, sf_exponent), 23, mask), 'float32')
         if out_config.use_packed_ue8m0:
-            return sf_exponent, sf_inv
-        sf = T.reinterpret(S.vshls(sf_exponent, 23), 'float32x64')
-        return sf, sf_inv
+            return V.vcvt(sf_exponent, 'uint8', saturate='SAT'), sf_inv
+        return V.vinterpret_cast(V.vshls(sf_exponent, 23, mask), 'float32'), sf_inv
 
     @T.macro
     def quantize_block(x_ub, out_ub, sf_out_ub, sf_in_ub, dequant_ub, sf_row_base=0):
         with T.SimdVF():
-            # Prepare and build gather offsets per input sf layout
-            sf_dist = 'PK4_B32' if out_config.use_packed_ue8m0 else 'NORM_B32'
-            amax = S.alloc_local((num_vecs,), T.float32)
-            sf_inv = S.alloc_local((num_vecs,), T.float32)
+            f32_lanes = 128 if use_bf16_compute else 64
+            mask64 = V.create_mask(64, size=64)
+            mask128 = V.create_mask(128, size=128)
+            f32_mask = mask128 if use_bf16_compute else mask64
+            f32 = V.vreg(f32_lanes, T.float32)
+            amax = V.alloc_local((num_vecs // compute_vec_factor,), f32)
+            sf_inv = V.alloc_local((num_vecs // compute_vec_factor,), f32)
+            clamp_v = V.vbrc(T.float32(out_config.clamp_min_value), size=f32_lanes)
+            qmax_v = V.vbrc(T.float32(quant_max), size=f32_lanes)
+            inv_q = V.vbrc(T.float32(1.0 / quant_max), size=f32_lanes)
+            u1 = V.vbrc(T.uint32(1), size=f32_lanes)
+            u254 = V.vbrc(T.uint32(254), size=f32_lanes)
 
             if use_bf16_compute:
-                zero_bf16 = S.vdup(0.0, T.bfloat16)
-                bf16_abs_mask = T.reinterpret(S.vdup(0x7FFF, T.uint16), 'bfloat16x128')
+                bf16_abs_mask = V.vbrc(T.uint16(0x7FFF), size=128)
                 if in_config.with_sf:
-                    sf_lane = T.reinterpret(S.vshrs(S.vci(0, T.int16), 5), 'uint16x128')  # 0x32 1x32 2x32 3x32
+                    sf_lane = V.vshrs(V.vci(T.uint16(0), size=128), 5, mask128)
                     if in_config.use_tma_aligned_col_major_sf:
-                        # Col-major: int16 entries viewed as byte pairs, flat (k-block, token-pair) order.
                         sf_flat_ub = T.view(sf_in_ub, (block_k // sf_in_block_k * block_m * pack_factor,), T.uint8)
-                        sf_offsets = S.vadd(
-                            S.vmuls(S.vshrs(sf_lane, 1), block_m * pack_factor),
-                            S.vand(sf_lane, S.vdup(1, T.uint16)),
-                        )  # 0x32 1x32 (2 * block_m)x32 (2 * block_m + 1)x32
-                        sf_mask = S.pset(8)
+                        sf_offsets = V.vadd(
+                            V.vmuls(V.vshrs(sf_lane, 1, mask128), block_m * pack_factor, mask128),
+                            V.vand(sf_lane, V.vbrc(T.uint16(1), size=128)),
+                        )
                         sf_col_stride = block_m * pack_factor
                         sf_row_stride = pack_factor
                     else:
                         sf_flat_ub = T.view(sf_in_ub, (sf_in_rows * sf_in_cols,), T.uint8)
                         sf_offsets = sf_lane
-                        sf_mask = None
                         sf_col_stride = 1
                         sf_row_stride = sf_in_cols
             else:
-                f32_abs_mask = T.reinterpret(S.vdup(0x7FFFFFFF, T.uint32), 'float32x64')
-                sf_lane = T.reinterpret(S.vshrs(S.vci(0, T.int32), 5), 'uint32x64')  # 0x32 1x32
+                sf_idx = V.vshrs(V.vci(T.uint32(0), size=64), 5, mask64)
 
             for sf_row in T.serial(sf_rows_per_group):
                 row_base = sf_row * num_per_tokens
-                # Dequantize and accumulate amax
                 for chunk in T.serial(block_k // quant_chunk_size):
                     chunk_base = chunk * quant_chunk_size
-                    if use_bf16_compute:
-                        amax_bf16 = S.alloc_local((num_vecs // compute_vec_factor,), T.bfloat16)
                     for vec in T.unroll(num_vecs // compute_vec_factor, explicit=True):
                         vec_col = vec * 64 * compute_vec_factor
                         if use_bf16_compute:
-                            # bf16 path
-                            amax_bf16[vec] = S.vdup(0.0, T.bfloat16)
+                            acc_bf16 = V.vbrc(T.bfloat16(0.0), size=128)
                             if in_config.with_sf:
                                 if in_config.use_tma_aligned_col_major_sf:
                                     sf_col = chunk * (quant_chunk_size // 64) + vec * 2
@@ -150,79 +144,66 @@ def get_per_channel_cast_kernel_asc(
                                     sf_col = chunk * (quant_chunk_size // 32) + vec * 4
                             for row in T.serial(num_per_tokens):
                                 if in_config.with_sf:
-                                    raw_f32_0 = S.vcvt(S.vld(x_ub[row_base + row, chunk_base + vec_col], dist='UNPK4_B8'), T.float32)
-                                    raw_f32_1 = S.vcvt(S.vld(x_ub[row_base + row, chunk_base + vec_col + 64], dist='UNPK4_B8'), T.float32)
-                                    _, raw_bf16 = S.vdintlv(T.reinterpret(raw_f32_0, 'bfloat16x128'), T.reinterpret(raw_f32_1, 'bfloat16x128'))
-                                    sf_exponents = S.vgather2(
+                                    raw_bf16 = V.vcvt(V.vload(x_ub[row_base + row, chunk_base + vec_col], size=128), 'bfloat16')
+                                    exp_u16 = V.vgather(
                                         sf_flat_ub[(row_base + row) * sf_row_stride + sf_col * sf_col_stride],
                                         sf_offsets,
-                                        mask=sf_mask,
+                                        mask128,
                                     )
-                                    sf_bits = S.vshls(sf_exponents, 7)
-                                    values_bf16 = S.vmul(raw_bf16, T.reinterpret(sf_bits, 'bfloat16x128'))
-                                    S.vsts(dequant_ub[row, vec_col], values_bf16, dist='NORM_B16')
+                                    values_bf16 = V.vmul(raw_bf16, V.vinterpret_cast(V.vshls(exp_u16, 7, mask128), 'bfloat16'))
+                                    V.vstore(values_bf16, dequant_ub[row, vec_col])
                                 else:
-                                    values_bf16 = S.vld(x_ub[row_base + row, chunk_base + vec_col])
-                                amax_bf16[vec] = S.vmax(amax_bf16[vec], S.vand(values_bf16, bf16_abs_mask))
+                                    values_bf16 = V.vload(x_ub[row_base + row, chunk_base + vec_col], size=128)
+                                acc_bf16 = V.vmax(
+                                    acc_bf16,
+                                    V.vinterpret_cast(V.vand(V.vinterpret_cast(values_bf16, 'uint16'), bf16_abs_mask), 'bfloat16'),
+                                )
+                            amax[vec] = V.vcvt(acc_bf16, 'float32')
                         else:
-                            # f32 path
-                            amax[vec] = S.vdup(0.0, T.float32)
+                            acc_f32 = V.vbrc(T.float32(0.0), size=64)
                             if in_config.use_tma_aligned_col_major_sf:
-                                sf_offsets = S.vadds(S.vmuls(sf_lane, block_m), (chunk * 8 + vec * 2) * block_m)
+                                sf_offsets = V.vadds(V.vmuls(sf_idx, block_m, mask64), (chunk * 8 + vec * 2) * block_m, mask64)
                             else:
-                                sf_offsets = S.vadds(sf_lane, vec * 2)
+                                sf_offsets = V.vadds(sf_idx, vec * 2, mask64)
                             for row in T.serial(num_per_tokens):
+                                raw_f32 = V.vcvt(V.vload(x_ub[row_base + row, chunk_base + vec_col], size=64), 'float32')
                                 if in_config.use_tma_aligned_col_major_sf:
-                                    input_scale = S.vgather2(sf_in_ub[0, 0], S.vadds(sf_offsets, row_base + row))
+                                    input_scale = V.vgather(sf_in_ub[0, 0], V.vadds(sf_offsets, row_base + row, mask64), mask64)
                                 else:
-                                    compact_sf = S.vld(sf_in_ub[row_base + row, chunk * 8])
-                                    input_scale = S.vselr(compact_sf, sf_offsets)
-                                dequant_f32 = S.vmul(
-                                    S.vcvt(S.vld(x_ub[row_base + row, chunk_base + vec_col], dist='UNPK4_B8'), T.float32),
-                                    input_scale,
-                                )
-                                S.vsts(dequant_ub[row, vec_col], dequant_f32)
-                                amax[vec] = S.vmax(amax[vec], S.vand(dequant_f32, f32_abs_mask))
-                        if use_bf16_compute:
-                            # Merge the 128-lane bf16 amax into two f32 half-vectors
-                            amax_lo, amax_hi = S.vintlv(zero_bf16, amax_bf16[vec])
-                            amax[vec * 2] = T.reinterpret(amax_lo, 'float32x64')
-                            amax[vec * 2 + 1] = T.reinterpret(amax_hi, 'float32x64')
-
-                    # Mem bar on dequant_ub
-                    S.mem_bar('VST_VLD')
-                    for pair in T.unroll(num_vecs // 2, explicit=True):
-                        # Write sf_out_ub
-                        for half in T.unroll(2, explicit=True):
-                            vec = pair * 2 + half
-                            sf, sf_inv[vec] = compute_sf_and_inv(amax[vec])
-                            S.vsts(sf_out_ub[sf_row_base + sf_row, chunk_base + vec * 64], sf, dist=sf_dist)
-
-                        # Calculate and write out_ub
-                        for half in T.unroll(2, explicit=True):
-                            vec = pair * 2 + half
-                            vec_col = vec * 64
-                            for row in T.serial(num_per_tokens):
-                                if use_bf16_compute:
-                                    value_ub, value_row, value_col = (dequant_ub, row, 0) if in_config.with_sf else (x_ub, row_base + row, chunk_base)
-                                    dequant_f32 = S.vcvt(S.vld(value_ub[value_row, value_col + vec_col], dist='UNPK_B16'), T.float32)
-                                else:
-                                    dequant_f32 = S.vld(dequant_ub[row, vec_col])
-                                scaled = S.vmul(dequant_f32, sf_inv[vec])
-                                S.vsts(
-                                    out_ub[row_base + row, chunk_base + vec_col],
-                                    S.vcvt(scaled, T.float8_e4m3fn),
-                                    dist='PK4_B32',
-                                )
+                                    input_scale = V.vgather(sf_in_ub[row_base + row, 0], sf_offsets, mask64)
+                                dequant_f32 = V.vmul(raw_f32, input_scale)
+                                V.vstore(dequant_f32, dequant_ub[row, vec_col])
+                                acc_f32 = V.vmax(acc_f32, V.vabs(dequant_f32))
+                            amax[vec] = acc_f32
+                    T.simd.mem_bar('VST_VLD')
+                    for vec in T.unroll(num_vecs // compute_vec_factor, explicit=True):
+                        sf, sf_inv[vec] = compute_sf_and_inv(amax[vec], clamp_v, qmax_v, inv_q, u1, u254, f32_mask)
+                        V.vstore(sf, sf_out_ub[sf_row_base + sf_row, chunk_base + vec * 64 * compute_vec_factor])
+                        vec_col = vec * 64 * compute_vec_factor
+                        for row in T.serial(num_per_tokens):
+                            if use_bf16_compute:
+                                value_ub, value_row, value_col = (dequant_ub, row, 0) if in_config.with_sf else (x_ub, row_base + row, chunk_base)
+                                dequant_f32 = V.vcvt(V.vload(value_ub[value_row, value_col + vec_col], size=128), 'float32')
+                            else:
+                                dequant_f32 = V.vload(dequant_ub[row, vec_col], size=64)
+                            V.vstore(
+                                V.vcvt(V.vmul(dequant_f32, sf_inv[vec]), 'float8_e4m3fn', rounding='R', saturate='SAT'),
+                                out_ub[row_base + row, chunk_base + vec_col],
+                            )
 
     @T.macro
     def pack_sf_rows(unpacked_sf_ub, packed_sf_ub, unpacked_row, packed_row):
         with T.SimdVF():
             for col in T.serial(0, block_k, vector_width):
-                packed_0, packed_1 = S.vintlv(S.vld(unpacked_sf_ub[unpacked_row, col]), S.vld(unpacked_sf_ub[unpacked_row + 1, col]))
-                S.vsts(packed_sf_ub[packed_row, col * 2], packed_0, dist='NORM_B8')
+                pack_mask = V.create_mask(vector_width, size=vector_width)
+                packed_0, packed_1 = V.vintlv(
+                    V.vload(unpacked_sf_ub[unpacked_row, col], size=vector_width),
+                    V.vload(unpacked_sf_ub[unpacked_row + 1, col], size=vector_width),
+                    pack_mask,
+                )
+                V.vstore(packed_0, packed_sf_ub[packed_row, col * 2])
                 if block_k - col >= vector_width:
-                    S.vsts(packed_sf_ub[packed_row, col * 2 + vector_width], packed_1, dist='NORM_B8')
+                    V.vstore(packed_1, packed_sf_ub[packed_row, col * 2 + vector_width])
 
     @T.prim_func
     def per_channel_cast_kernel(
