@@ -83,7 +83,8 @@ def get_per_token_cast_kernel_vmi(
 
     @T.macro
     def load_packed_input_scale_bf16(scales_ub, group, sf_shift, sf_exp_mask):
-        packed = V.vload(scales_ub[group // pack_factor], size=256, dist_mode='brc', group=2, stride=1)
+        slots = V.vload(scales_ub[group // pack_factor], size=2, group=2, stride=1)
+        packed = V.vbrc(slots, size=256, group=2)
         scale_bits = V.vand(V.vshl(V.vinterpret_cast(packed, 'uint32'), sf_shift), sf_exp_mask)
         scale_u16 = V.vcvt(V.vshr(scale_bits, V.vbrc(T.uint32(16), size=128)), 'uint16', saturate='NOSAT')
         return V.vinterpret_cast(scale_u16, 'bfloat16')
@@ -150,7 +151,8 @@ def get_per_token_cast_kernel_vmi(
                     if value_dtype != T.bfloat16:
                         scale = V.vcvt(scale, 'float32')
                 else:
-                    scale = V.vload(scales_ub[group], size=128, dist_mode='brc', group=4, stride=1)
+                    slots = V.vload(scales_ub[group], size=4, group=4, stride=1)
+                    scale = V.vbrc(slots, size=128, group=4)
                     if value_dtype == T.bfloat16:
                         scale = V.vcvt(scale, 'bfloat16')
                 for row in T.serial(block_m):
@@ -192,7 +194,8 @@ def get_per_token_cast_kernel_vmi(
                 for row in T.serial(block_m):
                     for tile in T.serial(block_k // 256):
                         col = tile * 256
-                        inverse = V.vload(sf_inv_ub[row, tile * 8], size=256, dist_mode='brc', group=8, stride=1)
+                        slots = V.vload(sf_inv_ub[row, tile * 8], size=8, group=8, stride=1)
+                        inverse = V.vbrc(slots, size=256, group=8)
                         values = V.vload(x_ub[row, col], size=256)
                         if out_config.dtype == T.float4_e2m1fn:
                             quantized = V.vmul(values, inverse)
@@ -239,7 +242,8 @@ def get_per_token_cast_kernel_vmi(
                     for pair in T.serial(block_k // 128):
                         col = pair * 128
                         group = pair * 4
-                        inverse = V.vload(sf_inv_ub[row, group], size=128, dist_mode='brc', group=4, stride=1)
+                        slots = V.vload(sf_inv_ub[row, group], size=4, group=4, stride=1)
+                        inverse = V.vbrc(slots, size=128, group=4)
                         values = load_f32_pair(x_ub, row, col)
                         quantized = V.vmul(values, inverse)
                         if out_config.dtype == T.float4_e2m1fn:
