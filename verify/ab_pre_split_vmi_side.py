@@ -131,5 +131,18 @@ for art_path in sorted(glob.glob(os.path.join(ART_DIR, "pre_split_asc_*.pt"))):
     c_comb = ulp(g_v[:, 8:], g_r[:, 8:])
     print(f"   grad columns maxbitdist: pre={c_pre} post={c_post} comb={c_comb}", flush=True)
 
+    # Save the VMI outputs for the fp64 three-way analysis (see ulp_analysis.py).
+    torch.save(
+        {
+            "fwd_out": {"pre": pre_out.cpu(), "post": post_out.cpu(), "comb": comb_out.cpu()},
+            "bwd": {
+                "input_mixes_grad": input_mixes_grad.cpu(),
+                "scale_grad_partial": scale_grad_partial.cpu(),
+                "base_grad_partial": base_grad_partial.cpu(),
+            },
+        },
+        art_path.replace("pre_split_asc_", "pre_split_vmi_"),
+    )
+
 print("\nALL BITWISE EQUAL" if all_ok else "\nMISMATCHES PRESENT (see above)")
 sys.exit(0 if all_ok else 1)

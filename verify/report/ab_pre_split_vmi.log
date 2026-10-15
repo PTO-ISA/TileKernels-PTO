@@ -1,0 +1,52 @@
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/d00899108/Ascend/cann-9.2.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/d00899108/Ascend/cann-9.2.0/x86_64-linux/ascend_toolkit_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/d00899108/Ascend/cann-9.2.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/d00899108/Ascend/cann-9.2.0/x86_64-linux/ascend_toolkit_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+Loading tilelang libs from dev root: /data/sunkexin/tkvmi/src/tilelang/build
+CUTLASS is not installed or found in the expected path
+--- pre_split_asc_n01_n11001_seed0.pt ---
+   fwd pre: eq=False mismatch=327/4004 maxbitdist=1
+   fwd post: eq=False mismatch=398/4004 maxbitdist=1
+   fwd comb: eq=True mismatch=0/16016 maxbitdist=0
+   bwd input_mixes_grad: eq=False mismatch=245/24024 maxbitdist=8
+   bwd scale_grad_partial: eq=False mismatch=8/168 maxbitdist=128
+   bwd base_grad_partial: eq=False mismatch=26/1344 maxbitdist=16
+   grad columns maxbitdist: pre=8 post=0 comb=0
+--- pre_split_asc_n01_n11024_seed0.pt ---
+   fwd pre: eq=False mismatch=418/4096 maxbitdist=1
+   fwd post: eq=False mismatch=362/4096 maxbitdist=1
+   fwd comb: eq=True mismatch=0/16384 maxbitdist=0
+   bwd input_mixes_grad: eq=False mismatch=277/24576 maxbitdist=21
+   bwd scale_grad_partial: eq=False mismatch=12/168 maxbitdist=12
+   bwd base_grad_partial: eq=False mismatch=32/1344 maxbitdist=32
+   grad columns maxbitdist: pre=21 post=0 comb=0
+--- pre_split_asc_n01_n14096_seed0.pt ---
+   fwd pre: eq=False mismatch=1510/16384 maxbitdist=1
+   fwd post: eq=False mismatch=1483/16384 maxbitdist=1
+   fwd comb: eq=True mismatch=0/65536 maxbitdist=0
+   bwd input_mixes_grad: eq=False mismatch=1238/98304 maxbitdist=17
+   bwd scale_grad_partial: eq=False mismatch=30/168 maxbitdist=32
+   bwd base_grad_partial: eq=False mismatch=101/1344 maxbitdist=1024
+   grad columns maxbitdist: pre=17 post=0 comb=0
+--- pre_split_asc_n02_n11001_seed0.pt ---
+   fwd pre: eq=False mismatch=737/8008 maxbitdist=2
+   fwd post: eq=False mismatch=707/8008 maxbitdist=1
+   fwd comb: eq=True mismatch=0/32032 maxbitdist=0
+   bwd input_mixes_grad: eq=False mismatch=615/48048 maxbitdist=334
+   bwd scale_grad_partial: eq=False mismatch=24/168 maxbitdist=64
+   bwd base_grad_partial: eq=False mismatch=75/1344 maxbitdist=18
+   grad columns maxbitdist: pre=334 post=0 comb=0
+--- pre_split_asc_n02_n14096_seed0.pt ---
+   fwd pre: eq=False mismatch=2956/32768 maxbitdist=1
+   fwd post: eq=False mismatch=2550/32768 maxbitdist=1
+   fwd comb: eq=True mismatch=0/131072 maxbitdist=0
+   bwd input_mixes_grad: eq=False mismatch=2073/196608 maxbitdist=9
+   bwd scale_grad_partial: eq=False mismatch=41/168 maxbitdist=128
+   bwd base_grad_partial: eq=False mismatch=130/1344 maxbitdist=1536
+   grad columns maxbitdist: pre=9 post=0 comb=0
+
+MISMATCHES PRESENT (see above)

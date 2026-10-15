@@ -1,0 +1,4 @@
+vmi fwd n1=512: single min=38.58us mean=50.39us | amortized min=24.28us mean=28.49us io=0.000GB bw=4GB/s
+vmi bwd n1=512: single min=65.47us mean=71.03us | amortized min=32.23us mean=34.60us io=0.000GB bw=5GB/s
+vmi fwd n1=8192: single min=36.03us mean=43.06us | amortized min=23.91us mean=25.21us io=0.002GB bw=66GB/s
+vmi bwd n1=8192: single min=46.34us mean=56.76us | amortized min=32.56us mean=33.60us io=0.002GB bw=77GB/s

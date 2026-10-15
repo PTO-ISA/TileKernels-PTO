@@ -66,6 +66,27 @@ def timed(fn):
     return min(times), sum(times) / len(times)
 
 
+def timed_amortized(fn):
+    """50 back-to-back launches inside one timed window: isolates the kernel
+    body from the single-launch overhead that dominates this micro-kernel."""
+    for _ in range(WARMUP):
+        fn()
+    torch.npu.synchronize()
+    times = []
+    for _ in range(ITERS):
+        FLUSH.fill_(0.0)
+        torch.npu.synchronize()
+        start = torch.npu.Event(enable_timing=True)
+        end = torch.npu.Event(enable_timing=True)
+        start.record()
+        for _ in range(50):
+            fn()
+        end.record()
+        torch.npu.synchronize()
+        times.append(start.elapsed_time(end) * 1e3 / 50)  # ms -> us per launch
+    return min(times), sum(times) / len(times)
+
+
 results = []
 for n0, n1 in CASES:
     n = n0 * n1
@@ -90,9 +111,10 @@ for n0, n1 in CASES:
         )
 
     tmin, tmean = timed(run_fwd)
+    amin, amean = timed_amortized(run_fwd)
     io_gb = (input_mixes.numel() * 4 + mhc_scale.numel() * 4 + mhc_base.numel() * 4 + (pre_out.numel() + post_out.numel() + comb_out.numel()) * 4) / 1e9
-    results.append({"op": "fwd", "n0": n0, "n1": n1, "us_min": tmin, "us_mean": tmean, "io_gb": io_gb})
-    print(f"{SIDE} fwd n1={n1}: min={tmin:.2f}us mean={tmean:.2f}us io={io_gb:.3f}GB bw={io_gb / tmin * 1e6:.0f}GB/s", flush=True)
+    results.append({"op": "fwd", "n0": n0, "n1": n1, "us_min": tmin, "us_mean": tmean, "us_amort_min": amin, "us_amort_mean": amean, "io_gb": io_gb})
+    print(f"{SIDE} fwd n1={n1}: single min={tmin:.2f}us mean={tmean:.2f}us | amortized min={amin:.2f}us mean={amean:.2f}us io={io_gb:.3f}GB bw={io_gb / amin * 1e6:.0f}GB/s", flush=True)
 
     input_mixes_grad = torch.empty((n, MHC_MULT3), dtype=torch.float32, device=DEV)
     scale_grad_partial = torch.empty((NVC, 3), dtype=torch.float32, device=DEV)
@@ -107,13 +129,14 @@ for n0, n1 in CASES:
         )
 
     tmin, tmean = timed(run_bwd)
+    amin, amean = timed_amortized(run_bwd)
     io_gb = (
         (pre_grad.numel() + post_grad.numel() + comb_grad.numel() + input_mixes.numel() + post_mix.numel() + input_mixes_grad.numel()) * 4
         + mhc_scale.numel() * 4 + mhc_base.numel() * 4
         + (scale_grad_partial.numel() + base_grad_partial.numel()) * 4
     ) / 1e9
-    results.append({"op": "bwd", "n0": n0, "n1": n1, "us_min": tmin, "us_mean": tmean, "io_gb": io_gb})
-    print(f"{SIDE} bwd n1={n1}: min={tmin:.2f}us mean={tmean:.2f}us io={io_gb:.3f}GB bw={io_gb / tmin * 1e6:.0f}GB/s", flush=True)
+    results.append({"op": "bwd", "n0": n0, "n1": n1, "us_min": tmin, "us_mean": tmean, "us_amort_min": amin, "us_amort_mean": amean, "io_gb": io_gb})
+    print(f"{SIDE} bwd n1={n1}: single min={tmin:.2f}us mean={tmean:.2f}us | amortized min={amin:.2f}us mean={amean:.2f}us io={io_gb:.3f}GB bw={io_gb / amin * 1e6:.0f}GB/s", flush=True)
     del input_mixes, pre_grad, post_grad, comb_grad, post_mix, pre_out, post_out, comb_out, input_mixes_grad
     torch.npu.empty_cache()
 

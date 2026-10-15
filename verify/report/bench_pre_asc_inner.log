@@ -1,0 +1,4 @@
+asc fwd n1=512: single min=25.03us mean=34.28us | amortized min=14.08us mean=15.13us io=0.000GB bw=7GB/s
+asc bwd n1=512: single min=34.39us mean=53.92us | amortized min=24.75us mean=25.52us io=0.000GB bw=7GB/s
+asc fwd n1=8192: single min=35.33us mean=51.09us | amortized min=14.29us mean=14.75us io=0.002GB bw=110GB/s
+asc bwd n1=8192: single min=23.45us mean=50.86us | amortized min=24.58us mean=25.10us io=0.002GB bw=102GB/s

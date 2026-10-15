@@ -1,0 +1,9 @@
+Loading tilelang libs from dev root: /data/sunkexin/tkvmi/src/tilelang/build
+CUTLASS is not installed or found in the expected path
+PASS n0=1 n1=1001: n=1001 max|diff| fwd pre/post/comb=0.00e+00/0.00e+00/0.00e+00 bwd in_grad=2.38e-07
+PASS n0=1 n1=1024: n=1024 max|diff| fwd pre/post/comb=0.00e+00/0.00e+00/0.00e+00 bwd in_grad=5.96e-08
+PASS n0=1 n1=4096: n=4096 max|diff| fwd pre/post/comb=0.00e+00/0.00e+00/0.00e+00 bwd in_grad=2.98e-08
+PASS n0=2 n1=1001: n=2002 max|diff| fwd pre/post/comb=0.00e+00/0.00e+00/0.00e+00 bwd in_grad=1.19e-07
+PASS n0=2 n1=4096: n=8192 max|diff| fwd pre/post/comb=0.00e+00/0.00e+00/0.00e+00 bwd in_grad=7.45e-09
+
+=== 5/5 passed ===

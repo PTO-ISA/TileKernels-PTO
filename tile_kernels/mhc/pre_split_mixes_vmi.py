@@ -117,16 +117,21 @@ def mhc_pre_split_mixes_fwd_simd_mhc4_vmi(
                 post_base_vec = zeros
                 comb_base_vec = zeros
 
-                for base_id in range(4):
+                # PTODSL range/T.serial loop variables are index-typed and
+                # cannot feed VMI vector ops (vbrc/vcmps would build
+                # vreg<64xindex>); T.unroll(..., explicit=True) folds the
+                # constant trip counts at trace time so the base ids stay
+                # si32 constants.  Same iterations, same order.
+                for base_id in T.unroll(4, explicit=True):
                     base_mask = V.vcmps(col3, T.int32(base_id), mask_full, 'eq')
                     pre_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id, 0], size=1), size=64), pre_base_vec)
                     post_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 4, 0], size=1), size=64), post_base_vec)
 
-                for base_id in range(16):
+                for base_id in T.unroll(16, explicit=True):
                     base_mask = V.vcmps(col15, T.int32(base_id), mask_full, 'eq')
                     comb_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 8, 0], size=1), size=64), comb_base_vec)
 
-                for vec_id in T.serial(4):
+                for vec_id in T.unroll(4, explicit=True):
                     token = V.vadd(V.vshr(idx, V.vbrc(T.int32(2), size=64)), V.vbrc(T.int32(vec_id * 16), size=64))
                     token_offset = V.vadd(V.vshl(token, V.vbrc(T.int32(4), size=64)), V.vshl(token, V.vbrc(T.int32(3), size=64)))
                     pre_index = V.vadd(token_offset, col3)
@@ -140,7 +145,7 @@ def mhc_pre_split_mixes_fwd_simd_mhc4_vmi(
                     post_sig = V.vdiv(ones, V.vadd(V.vexpdif(zeros, post_val, mask_full), ones))
                     V.vstore(V.vmul(post_sig, V.vbrc(T.float32(mhc_post_mult_value), size=64)), post_layer_mix_ub[vec_id * 16, 0])
 
-                for vec_id in T.serial(16):
+                for vec_id in T.unroll(16, explicit=True):
                     token = V.vadd(V.vshr(idx, V.vbrc(T.int32(4), size=64)), V.vbrc(T.int32(vec_id * 4), size=64))
                     token_offset = V.vadd(V.vshl(token, V.vbrc(T.int32(4), size=64)), V.vshl(token, V.vbrc(T.int32(3), size=64)))
                     comb_index = V.vadd(V.vadd(token_offset, V.vbrc(T.int32(8), size=64)), col15)
@@ -257,11 +262,11 @@ def mhc_pre_split_mixes_bwd_mhc4_vmi(
                 pre_base_vec = zeros
                 post_base_vec = zeros
                 comb_base_vec = zeros
-                for base_id in range(4):
+                for base_id in T.unroll(4, explicit=True):
                     base_mask = V.vcmps(col3, T.int32(base_id), mask_full, 'eq')
                     pre_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id, 0], size=1), size=64), pre_base_vec)
                     post_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 4, 0], size=1), size=64), post_base_vec)
-                for base_id in range(16):
+                for base_id in T.unroll(16, explicit=True):
                     base_mask = V.vcmps(col15, T.int32(base_id), mask_full, 'eq')
                     comb_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 8, 0], size=1), size=64), comb_base_vec)
 
@@ -275,7 +280,7 @@ def mhc_pre_split_mixes_bwd_mhc4_vmi(
                 # The hot full-block specialization uses the all-lane mask;
                 # only the final block materializes per-vector tail masks.
                 valid_tokens = T.min(token_block_size, num_tokens - t * token_block_size)
-                for vec_id in T.serial(4):
+                for vec_id in T.unroll(4, explicit=True):
                     token = V.vadd(V.vshr(idx, V.vbrc(T.int32(2), size=64)), V.vbrc(T.int32(vec_id * 16), size=64))
                     token4 = V.vshl(token, V.vbrc(T.int32(2), size=64))
                     token24 = V.vadd(V.vshl(token, V.vbrc(T.int32(4), size=64)), V.vshl(token, V.vbrc(T.int32(3), size=64)))
@@ -302,7 +307,7 @@ def mhc_pre_split_mixes_bwd_mhc4_vmi(
                     scale_acc[1] = V.vadd(scale_acc[1], V.vmul(post_grad, post_inp))
                     base_acc[1] = V.vadd(base_acc[1], post_grad)
 
-                for vec_id in T.serial(16):
+                for vec_id in T.unroll(16, explicit=True):
                     token = V.vadd(V.vshr(idx, V.vbrc(T.int32(4), size=64)), V.vbrc(T.int32(vec_id * 4), size=64))
                     token16 = V.vshl(token, V.vbrc(T.int32(4), size=64))
                     token24 = V.vadd(token16, V.vshl(token, V.vbrc(T.int32(3), size=64)))
