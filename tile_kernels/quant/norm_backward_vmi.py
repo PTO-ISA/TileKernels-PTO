@@ -56,10 +56,7 @@ def get_norm_backward_kernel_vmi(
             mask128 = V.create_mask(128, size=128)
             mask1 = V.create_mask(1, size=1)
             # g = dy * out_scale * weight; dX = (g - xhat * mean(xhat * g)) * rstd.
-            for row in T.serial(num_rows):
-                # vload-based broadcast: a bare scalar read of rstd_ub[row]
-                # bypasses the version rotation (stale stage) and the VST_VLD
-                # ordering; the vector load stays on the ordered, versioned pipe.
+            for row in T.serial(T.uint16(num_rows)):
                 rstd_value = V.vbrc(V.vload(rstd_ub[row], size=1), size=128, group=1)
                 total = V.alloc_var(T.float32, size=128)
                 total = V.vbrc(T.float32(0.0), size=128)
@@ -71,17 +68,15 @@ def get_norm_backward_kernel_vmi(
                         dy = V.vmul(dy, load_f32(weight_ub, col, 128), mask128)
                     total = V.vmula(total, V.vmul(x, rstd_value, mask128), dy, mask128)
                 mean_value = V.vmuls(V.vcadd(total, mask128, reassoc=True), 1.0 / hidden, mask1)
-                # vcadd reduced to one lane: this is ASC's ONEPT mean store.
                 V.vstore(mean_value, mean_ub[row], mask1)
             T.simd.mem_bar('VST_VLD')
-            # dW stays in memory order across rows; no pair canonicalization needed.
             for vector in T.serial(T.uint16(hidden // 128)):
                 col = vector * 128
                 dw = V.alloc_var(T.float32, size=128)
                 if with_weight:
                     w = load_f32(weight_ub, col, 128)
                     dw = load_f32(weight_grad_ub, col, 128)
-                for row in T.serial(num_rows):
+                for row in T.serial(T.uint16(num_rows)):
                     inv_rms = V.vbrc(V.vload(rstd_ub[row], size=1), size=128, group=1)
                     mean = V.vbrc(V.vload(mean_ub[row], size=1), size=128, group=1)
                     x = load_f32(x_ub, row * hidden + col, 128)
