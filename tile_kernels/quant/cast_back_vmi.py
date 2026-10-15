@@ -115,16 +115,16 @@ def get_cast_back_kernel_vmi(
     def load_scale(sf_ub, group, col, size, sf_shift=None, sf_exp_mask=None):
         if use_lazy_packed_scale:
             if in_config.use_tma_aligned_col_major_sf:
-                packed_v = V.vload(sf_ub[col // 64, group], size=size * 2, stride=sf_raw_cols, group=size // 64)
+                packed_v = (V.vbrc(V.vload(sf_ub[col // 64, group], size=size // 64, stride=sf_raw_cols, group=size // 64), size=size * 2, group=size // 64))
             else:
-                packed_v = V.vload(sf_ub[group, col // 64], size=size * 2, stride=1, group=size // 64)
+                packed_v = (V.vbrc(V.vload(sf_ub[group, col // 64], size=size // 64), size=size * 2, group=size // 64))
             packed_u = V.vinterpret_cast(packed_v, 'uint32')
             return V.vinterpret_cast(V.vand(V.vshl(packed_u, sf_shift), sf_exp_mask), 'float32')
         if num_per_channels == 1:
             return V.vload(sf_ub[group, col], size=size)
         if keep_unpacked_col_major:
-            return V.vload(sf_ub[col // 32, group], size=size, stride=num_sf_rows_padded, group=size // 32)
-        return V.vload(sf_ub[group, col // 32], size=size, stride=1, group=size // 32)
+            return (V.vbrc(V.vload(sf_ub[col // 32, group], size=size // 32, stride=num_sf_rows_padded, group=size // 32), size=size, group=size // 32))
+        return (V.vbrc(V.vload(sf_ub[group, col // 32], size=size // 32), size=size, group=size // 32))
 
     @T.macro
     def store_out(out_ub, row, col, out_f32):
@@ -153,7 +153,7 @@ def get_cast_back_kernel_vmi(
                 for row in T.serial(block_m):
                     for chunk in T.serial(block_k // 256):
                         col = chunk * 256
-                        scale256 = V.vload(sf_ub[row, chunk * 8], size=256, stride=1, group=8)
+                        scale256 = (V.vbrc(V.vload(sf_ub[row, chunk * 8], size=8), size=256, group=8))
                         x_256 = V.vcvt(V.vload(x_ub[row, col], size=256), 'bfloat16')
                         V.vstore(V.vmul(x_256, scale256), out_ub[row, col])
             else:
