@@ -116,9 +116,6 @@ def get_norm_forward_kernel_vmi(
         rows_per_tile //= 2
 
     # Batches with the same tiling share compiled code, independent of row strides.
-    # Packed FP4 params cannot carry symbolic outer strides (PTO adapter), and a
-    # batched contiguous FP4 output has batch stride num_tokens * hidden: keep
-    # num_tokens as the compile-time int for FP4 (one kernel per token count).
     if out_config.dtype != T.float4_e2m1fn:
         num_tokens = T.dynamic('num_tokens')
     batch = T.dynamic('batch')
@@ -127,9 +124,6 @@ def get_norm_forward_kernel_vmi(
     out_stride = T.dynamic('out_stride')
     out_batch_stride = T.dynamic('out_batch_stride')
     if out_config.dtype == T.float4_e2m1fn:
-        # The PTO adapter rejects any symbolic outer stride on packed FP4
-        # buffers, so dynamic-stride outputs are impossible for FP4; declare
-        # the output contiguous (per_token_cast_vmi/cast_back_vmi do the same).
         out_annotation = T.Tensor[(batch, num_tokens, hidden), out_config.dtype]
     else:
         out_annotation = T.StridedTensor[(batch, num_tokens, hidden), (out_batch_stride, out_stride, 1), out_config.dtype]
@@ -147,8 +141,6 @@ def get_norm_forward_kernel_vmi(
 
     @T.macro
     def clear_padding(buffer):
-        # No own T.SimdVF(): the only call sites are inside the kernel body's
-        # SimdVF block, and PTO forbids nested vecscopes (ASC tolerated them).
         full = V.create_mask(load_size, size=load_size)
         if buffer.dtype == T.bfloat16:
             zero = V.vbrc(T.bfloat16(0.0), size=load_size)
@@ -166,9 +158,6 @@ def get_norm_forward_kernel_vmi(
 
     @T.macro
     def reduce_row(x_ub, residual_ub, row_start):
-        # ASC widens each 128-element register into two 64-lane halves (vcvt
-        # part=0/1); VMI widens it into one 128-lane vector, so one accumulator
-        # covers both halves.
         mask128 = V.create_mask(128, size=128)
         num_chunks = reduction_cols // 128
         sums = V.alloc_local((num_chunks,), V.vreg(128, T.float32))
@@ -200,10 +189,6 @@ def get_norm_forward_kernel_vmi(
                     w = V.vmuls(w, out_scale, mask128)
             for row in T.serial(T.uint16(rows_per_tile)):
                 offset = row * padded_hidden + col
-                # The broadcast source must be a vector load: a bare scalar read
-                # of rstd_source[row] bypasses the VST_VLD ordering (and the
-                # version rotation), so the first user raced the rstd overwrite
-                # and read the raw square sum. vload stays on the ordered pipe.
                 inv_rms = V.vbrc(V.vload(rstd_source[row], size=1), size=128, group=1)
                 y = V.vmul(load_f32(x_ub, offset, 128), inv_rms, mask128)
                 if with_weight:
@@ -252,17 +237,12 @@ def get_norm_forward_kernel_vmi(
                 for vector in T.serial(T.uint16(padded_hidden // 128)):
                     col = vector * 128
                     group = vector * 4
-                    # One grouped broadcast covers the vector's four per-32 groups.
                     inv = V.vbrc(V.vload(scratch[row, group], size=4), size=128, group=4)
                     value = load_f32(source, row * padded_hidden + col, 128)
                     if with_out_bf16 and x_dtype != T.bfloat16:
                         V.vstore(V.vcvt(value, 'bfloat16', rounding='R'), auxiliary[row * padded_hidden + col], mask128)
                     scaled = V.vmul(value, inv, mask128)
                     if out_config.dtype == T.float4_e2m1fn:
-                        # VMI converts to packed FP4 only from BF16. Round the
-                        # product to odd (sticky bit = "dropped bits were
-                        # nonzero") with vunzip so the FP4 rounding sees the
-                        # exact FP32 bits.
                         lo, hi = V.vunzip(V.vinterpret_cast(scaled, 'uint32'), 'uint16')
                         packed = V.vinterpret_cast(V.vor(hi, V.vmins(lo, T.uint16(1), mask128), mask128), 'bfloat16')
                         V.vstore(V.vcvt(packed, 'float4_e2m1fn', rounding='R'), quantized[row, col], mask64)
@@ -284,12 +264,7 @@ def get_norm_forward_kernel_vmi(
                         + i % mega_sf_lane_rows * mega_sf_cols
                         + i % mega_sf_tile_rows // mega_sf_lane_rows
                     )
-                    # Byte-granular form of ASC's ui32->ui8 copy (the call site
-                    # passes mega_dma_bytes / mega_sf_bytes, both ui8 views).
-                    T.copy(
-                        mega_dma[row, : num_groups // T.uint32.bytes, : T.uint32.bytes],
-                        mega_sf[:, mega_row * T.uint32.bytes : (mega_row + 1) * T.uint32.bytes],
-                    )
+                    T.copy(mega_dma[row, : num_groups // T.uint32.bytes, :1], mega_sf[:, mega_row : mega_row + 1])
 
     @T.prim_func
     def norm_forward_kernel_vmi(
@@ -316,30 +291,15 @@ def get_norm_forward_kernel_vmi(
             scales_ub = T.alloc_shared((sf_rows, sf_size), out_config.sf_dtype)
             mega_packed_ub = T.alloc_shared((rows_per_tile, sf_size), T.uint8)
             mega_dma_ub = T.alloc_shared((rows_per_tile, sf_size // T.uint32.bytes, mega_dma_stride), T.uint32)
-            # Byte views on both sides of the mega SF store: ASC copies ui32 DMA
-            # lanes into a ui32 view of the ui8 GM table, but PTO's mte requires
-            # matching element widths. Same word layout, expressed in bytes.
-            mega_dma_bytes = T.view(
-                mega_dma_ub, (rows_per_tile, sf_size // T.uint32.bytes, mega_dma_stride * T.uint32.bytes), T.uint8
-            )
-            mega_sf_bytes = T.StridedTensor(
-                (hidden // 128, mega_moe_sf_rows * T.uint32.bytes),
-                (mega_moe_sf_rows * T.uint32.bytes, 1),
-                T.uint8,
-                data=mega_moe_sf.data,
-            )
+            mega_sf_words = T.Tensor((hidden // 128, mega_moe_sf_rows), T.uint32, mega_moe_sf.data)
             if transpose_sf:
                 transposed_sf_ub = T.alloc_shared((sf_size // sf_pack, sf_rows), sf_word_dtype)
                 transpose_indices_ub = T.alloc_shared((sf_lanes,), sf_word_dtype)
                 scale_words = T.Tensor((sf_rows, sf_size // sf_pack), sf_word_dtype, scales_ub.data)
-                # PTO's mte copies require matching element widths on both sides,
-                # and a GM-side word view still lowers as the underlying ui8
-                # pointer, so express the transposed copy in bytes (ui8<->ui8).
-                transposed_sf_bytes = T.view(transposed_sf_ub, (sf_size // sf_pack, sf_rows * sf_pack), T.uint8)
-                out_sf_bytes = T.StridedTensor(
-                    (batch, num_sf_words, num_tokens * sf_pack),
-                    (out_sf_batch_stride, out_sf_stride, 1),
-                    T.uint8,
+                out_sf_words = T.StridedTensor(
+                    (batch, num_sf_words, num_tokens),
+                    (out_sf_batch_stride // sf_pack, out_sf_stride // sf_pack, 1),
+                    sf_word_dtype,
                     data=out_sf.data,
                 )
             versions = {
@@ -394,8 +354,6 @@ def get_norm_forward_kernel_vmi(
                                     clear_padding(residual_ub)
                                 T.simd.mem_bar('VST_VLD')
                             for row in T.serial(T.uint16(rows_per_tile)):
-                                # vcadd reduces to a one-lane vector, so this store is
-                                # ASC's ONEPT single-element write of the row sum.
                                 square_sum = reduce_row(x_ub, residual_ub, row * padded_hidden)
                                 V.vstore(square_sum, rstd_ub[row])
                             T.simd.mem_bar('VST_VLD')
@@ -404,16 +362,10 @@ def get_norm_forward_kernel_vmi(
                             if rows_per_tile * T.float32.bytes >= 32:
                                 V.vstore(rstd_values, rstd_out_ub[row_base], V.create_mask(rows_per_tile, size=64))
                             else:
-                                # Short groups: a row_base-strided masked store is not
-                                # provably 32-byte aligned (the ptoas masked-store
-                                # contract), so write the rows with a scatter, whose
-                                # per-lane addresses carry no alignment requirement.
-                                V.vscatter(
-                                    rstd_values,
-                                    rstd_out_ub[0],
-                                    V.vinterpret_cast(V.vci(T.int32(row_base), size=64), 'uint32'),
-                                    V.create_mask(rows_per_tile, size=64),
-                                )
+                                # Vector stores require 32-byte alignment; short groups use scalar stores.
+                                for row in T.unroll(rows_per_tile, explicit=True):
+                                    value = V.vselr(rstd_values, V.vbrc(T.uint32(row), size=64))
+                                    V.vstore(value, rstd_out_ub[row_base + row], V.create_mask(1, size=64))
                             T.simd.mem_bar('VST_VLD')
                             apply_tile(residual_ub if with_residual else x_ub, weight_ub, out_ub, rstd_ub)
                         if out_config.with_sf:
@@ -432,7 +384,7 @@ def get_norm_forward_kernel_vmi(
                             out[batch_id, token_start : token_start + rows_per_tile, :hidden],
                         )
                         if out_config.with_sf:
-                            store_tile_scales(scales_ub, out_sf, mega_sf_bytes, mega_dma_bytes, batch_id, token_start)
+                            store_tile_scales(scales_ub, out_sf, mega_sf_words, mega_dma_ub, batch_id, token_start)
                         if with_out_bf16:
                             T.copy(
                                 T.reshape(out_bf16_ub, (rows_per_tile, padded_hidden))[:, :hidden],
@@ -453,10 +405,9 @@ def get_norm_forward_kernel_vmi(
                             pack = vector * (sf_lanes // sf_rows)
                             values = V.vgather(scale_words[0, pack], indices, mask_lanes)
                             V.vstore(values, transposed_sf_ub[pack, 0])
-                    # Byte-granular form of ASC's word copy (see view declarations).
                     T.copy(
-                        transposed_sf_bytes[:num_sf_words, : valid_rows * sf_pack],
-                        out_sf_bytes[batch_id, :, token_base * sf_pack : (token_base + valid_rows) * sf_pack],
+                        transposed_sf_ub[:num_sf_words, :valid_rows],
+                        out_sf_words[batch_id, :, token_base : token_base + valid_rows],
                     )
                 T.copy(rstd_out_ub[:valid_rows], rstd[batch_id, token_base])
 

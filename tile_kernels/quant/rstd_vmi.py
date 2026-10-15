@@ -1,9 +1,4 @@
-"""Compensated RSTD helpers for VMI (PTO) TileLang kernels.
-
-Line-for-line mirror of tile_kernels/quant/rstd.py in VMI spelling: same
-compensated arithmetic, same helper structure; only the SIMD surface differs
-(explicit masks, `vbrc` constants, `alloc_local` of VMI vectors).
-"""
+"""Compensated RSTD helpers for VMI TileLang kernels."""
 
 import struct
 
