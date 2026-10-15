@@ -1,5 +1,3 @@
-import os
-
 import tilelang
 from tilelang.ascend import language as T
 
@@ -20,110 +18,6 @@ _BF16_EXP_BIAS = 0x7F00
 _EXP_MASK_F32 = 0x7F800000
 _F32_EXP_BIAS = 0x7F000000
 
-# VF latency profiles (issue #1337).
-#
-# The value handed to T.SimdVF(latency=...) is a *scheduling* constant: it does
-# not estimate the region's real cycle cost, it shapes the pipeline the Z3
-# pipeliner emits.  Two frozen profiles are kept and selectable:
-#
-#   'asc'  -- the calibrated constants that make the emitted VF pipeline
-#             per-config equal to ASC's (all 6 task stages + solve II; 10/12
-#             e4m3 rows class A).  This is the ASC-alignment profile.  Values
-#             from experiments/issue1337-vf-pipeline-align/.
-#   'vmi'  -- the frozen per-region costs of the optimised VMI SimdVF body
-#             itself.  The emitted pipeline differs from ASC's (VF stages
-#             (2,2,3) instead of (1,1,2)) but it is the profile that clears the
-#             owner acceptance: 12/12 e4m3 configs asc/vmi >= 1.0 on the
-#             rebased base (min 1.0028), every config bit-exact.
-#
-# Both profiles are hard-coded on purpose.  Do NOT leave the latency unfilled
-# (`with T.SimdVF():`): tilelang would then derive it from a static TIR-node
-# cost model (src/ascend/transform/estimate_latency.cc) whose numbers drift with
-# the compiler base -- the same kernel measured 12/12 before the rebase and two
-# failing configs after it, purely because that model's op counts changed.
-#
-# The default profile is resolved ONCE at module import (from
-# `TILE_KERNELS_VMI_VF_LATENCY=asc|vmi`, default 'asc') into
-# _DEFAULT_VF_LATENCY_PROFILE below, so it is a bound parameter value and thus
-# part of the @tilelang.jit cache key for no-argument calls.  Switch per call
-# with `vf_latency_profile='asc'|'vmi'`; the env var is not re-read after import.
-_VF_LATENCY_ASC = {
-    ('fp32', True, 2048, 'amax'): 8,
-    ('fp32', True, 2048, 'scale'): 0,
-    ('fp32', True, 2048, 'cast'): 8,
-    ('fp32', True, 7168, 'amax'): 8,
-    ('fp32', True, 7168, 'scale'): 0,
-    ('fp32', True, 7168, 'cast'): 80,
-    ('fp32', False, 2048, 'amax'): 600,
-    ('fp32', False, 2048, 'scale'): 4,
-    ('fp32', False, 2048, 'cast'): 0,
-    ('fp32', False, 7168, 'amax'): 400,
-    ('fp32', False, 7168, 'scale'): 8,
-    ('fp32', False, 7168, 'cast'): 12,
-    ('bf16', True, 2048, 'amax'): 8,
-    ('bf16', True, 2048, 'scale'): 0,
-    ('bf16', True, 2048, 'cast'): 8,
-    ('bf16', True, 7168, 'amax'): 8,
-    ('bf16', True, 7168, 'scale'): 0,
-    ('bf16', True, 7168, 'cast'): 4,
-    ('bf16', False, 2048, 'amax'): 0,
-    ('bf16', False, 2048, 'scale'): 600,
-    ('bf16', False, 2048, 'cast'): 96,
-    ('bf16', False, 7168, 'amax'): 400,
-    ('bf16', False, 7168, 'scale'): 8,
-    ('bf16', False, 7168, 'cast'): 12,
-}
-
-_VF_LATENCY_VMI = {
-    ('fp32', True, 2048, 'amax'): 17,
-    ('fp32', True, 2048, 'scale'): 16,
-    ('fp32', True, 2048, 'cast'): 28,
-    ('fp32', True, 7168, 'amax'): 13,
-    ('fp32', True, 7168, 'scale'): 16,
-    ('fp32', True, 7168, 'cast'): 22,
-    ('fp32', False, 2048, 'amax'): 17,
-    ('fp32', False, 2048, 'scale'): 147,
-    ('fp32', False, 2048, 'cast'): 28,
-    ('fp32', False, 7168, 'amax'): 13,
-    ('fp32', False, 7168, 'scale'): 147,
-    ('fp32', False, 7168, 'cast'): 20,
-    ('bf16', True, 2048, 'amax'): 27,
-    ('bf16', True, 2048, 'scale'): 17,
-    ('bf16', True, 2048, 'cast'): 37,
-    ('bf16', True, 7168, 'amax'): 27,
-    ('bf16', True, 7168, 'scale'): 17,
-    ('bf16', True, 7168, 'cast'): 37,
-    ('bf16', False, 2048, 'amax'): 27,
-    ('bf16', False, 2048, 'scale'): 147,
-    ('bf16', False, 2048, 'cast'): 38,
-    ('bf16', False, 7168, 'amax'): 27,
-    ('bf16', False, 7168, 'scale'): 147,
-    ('bf16', False, 7168, 'cast'): 38,
-}
-
-_VF_LATENCY_PROFILES = {'asc': _VF_LATENCY_ASC, 'vmi': _VF_LATENCY_VMI}
-_VF_LATENCY_PROFILE_ENV = 'TILE_KERNELS_VMI_VF_LATENCY'
-
-def resolve_vf_latency_profile(profile: str | None = None) -> str:
-    """Resolve a profile name, defaulting to the env var and then 'asc'."""
-    name = profile if profile is not None else os.environ.get(_VF_LATENCY_PROFILE_ENV, 'asc')
-    name = name.strip().lower()
-    if name not in _VF_LATENCY_PROFILES:
-        raise ValueError(
-            f'unknown VF latency profile {name!r}; expected one of '
-            f'{sorted(_VF_LATENCY_PROFILES)}'
-        )
-    return name
-
-def eval_vf_latency(dtype_key: str, round_sf: bool, hidden: int, region: str,
-                    profile: str | None = None) -> int:
-    table = _VF_LATENCY_PROFILES[resolve_vf_latency_profile(profile)]
-    return table.get((dtype_key, bool(round_sf), int(hidden), region), 0)
-
-# Default profile for no-argument calls, resolved once at import time so it is a
-# bound default and therefore part of the jit cache key.  An explicit
-# vf_latency_profile argument still overrides it (and is validated per call).
-_DEFAULT_VF_LATENCY_PROFILE = resolve_vf_latency_profile()
 
 def _get_block_shape(hidden: int, dtype: T.dtype, num_stages: int, num_per_channels: int) -> tuple[int, int]:
     """Choose the widest valid block_k and largest UB-fitting block_m (ASC)."""
@@ -146,21 +40,13 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
     dtype: T.dtype,
     out_config: CastOutputConfig,
     num_vec_cores: int,
-    vf_latency_profile: str = _DEFAULT_VF_LATENCY_PROFILE,
 ):
     """ASC-shaped VMI entry; mirrors get_per_token_cast_and_cast_back_kernel_asc.
 
     The only structural differences from the ASC source of truth are the jit
-    decorator's target/pass_configs, this latency-profile selector (the
-    sanctioned _VF_LATENCY exemption), and the logical T.vmi.* bodies inside
-    the four T.SimdVF regions.
-
-    vf_latency_profile defaults to _DEFAULT_VF_LATENCY_PROFILE, resolved from
-    TILE_KERNELS_VMI_VF_LATENCY at import time, so the default is part of the
-    @tilelang.jit cache key and a no-argument call is stable for the process
-    lifetime.  Pass an explicit 'asc'/'vmi' to switch per call.
+    decorator's target/pass_configs and the logical T.vmi.* bodies inside the
+    four T.SimdVF regions.
     """
-    vf_latency_profile = resolve_vf_latency_profile(vf_latency_profile)
     num_per_channels = out_config.sf_block[1]
     is_bf16_in = dtype == T.bfloat16
     assert dtype in (T.bfloat16, T.float32), 'Ascend per-token cast and cast-back only supports bf16 or fp32 input'
@@ -228,8 +114,7 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
     @T.macro
     def collect_amax(x_ub, amax_ub):
         """Collect per-group maxima across all rows and tiles in the UB block."""
-        with T.SimdVF(latency=eval_vf_latency('bf16' if is_bf16_in else 'fp32', round_sf, hidden, 'amax',
-                                              profile=vf_latency_profile)):
+        with T.SimdVF():
             tile_k = num_per_channels * 8
             for row in T.serial(block_m):
                 for tile in T.serial(block_k // tile_k):
@@ -240,8 +125,7 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
     @T.macro
     def compute_sf(amax_ub, sf_ub, sf_inv_ub):
         """Compute scales and inverse scales from group maxima in the requested scale format."""
-        with T.SimdVF(latency=eval_vf_latency('bf16' if is_bf16_in else 'fp32', round_sf, hidden, 'scale',
-                                              profile=vf_latency_profile)):
+        with T.SimdVF():
             if round_sf:
                 exp_mask = T.vmi.vbrc(T.uint32(_EXP_MASK_F32), size=64)
                 sf_inv_bias_u32 = T.vmi.vbrc(T.uint32(_F32_EXP_BIAS + quant_max_exp), size=64)
@@ -344,8 +228,7 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
     @T.macro
     def cast_and_cast_back_per16(x_ub, sf_ub, sf_inv_ub, out_ub):
         """Process each row with per-16 scaling in tiles of 128 elements."""
-        with T.SimdVF(latency=eval_vf_latency('bf16' if is_bf16_in else 'fp32', round_sf, hidden, 'cast',
-                                              profile=vf_latency_profile)):
+        with T.SimdVF():
             for row in T.serial(block_m):
                 for tile in T.serial(block_k // 128):
                     sf_offset = row * num_groups + tile * 8
@@ -385,8 +268,7 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
     @T.macro
     def cast_and_cast_back_per32(x_ub, sf_ub, sf_inv_ub, out_ub):
         """Process each row with per-32 scaling, including any 128-element tail."""
-        with T.SimdVF(latency=eval_vf_latency('bf16' if is_bf16_in else 'fp32', round_sf, hidden, 'cast',
-                                              profile=vf_latency_profile)):
+        with T.SimdVF():
             bias_u16 = T.uint16(_BF16_EXP_BIAS)
             sf_inv_bias_u32 = T.uint32(_F32_EXP_BIAS)
             sf_inv_bias_value = bias_u16 if use_bf16_sf else sf_inv_bias_u32
