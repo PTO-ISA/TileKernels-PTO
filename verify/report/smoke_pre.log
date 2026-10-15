@@ -1,0 +1,20 @@
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+Loading tilelang libs from dev root: /data/sunkexin/tkvmi/src/tilelang/build
+CUTLASS is not installed or found in the expected path
+PASS fwd n=8 h=1280: n=8 h=1280 max|diff|=1.526e-05 bitwise=False
+PASS fwd n=8 h=4096: n=8 h=4096 max|diff|=3.906e-03 bitwise=False
+PASS fwd n=8 h=5120: n=8 h=5120 max|diff|=5.960e-08 bitwise=False
+PASS fwd n=64 h=7168: n=64 h=7168 max|diff|=7.812e-03 bitwise=False
+PASS bwd n=8 h=1280: n=8 h=1280 h_blk=1280 stages=3 x_grad_max=0.00e+00 mix_grad_max=5.72e-06
+PASS bwd n=8 h=4096: n=8 h=4096 h_blk=4096 stages=3 x_grad_max=0.00e+00 mix_grad_max=1.53e-05
+PASS bwd n=8 h=5120: n=8 h=5120 h_blk=1280 stages=4 x_grad_max=1.53e-05 mix_grad_max=1.53e-05
+PASS bwd n=64 h=7168: n=64 h=7168 h_blk=1792 stages=4 x_grad_max=7.81e-03 mix_grad_max=3.05e-05
+
+=== 8/8 passed ===
