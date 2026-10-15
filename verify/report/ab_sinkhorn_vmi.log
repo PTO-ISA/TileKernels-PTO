@@ -1,0 +1,32 @@
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+Loading tilelang libs from dev root: /data/sunkexin/tkvmi/src/tilelang/build
+CUTLASS is not installed or found in the expected path
+--- sinkhorn_asc_logits_m100_n8.pt ---
+/data/sunkexin/tkvmi/work/ab_sinkhorn_vmi_side.py:51: UserWarning: Cannot create tensor with interal format while allow_internel_format=False, tensor will be created with base format. (Triggered internally at torch_npu/csrc/aten/common/TensorFactories.cpp:339.)
+  out = torch.empty_like(x)
+   fwd out: eq=True mismatch=0/128 maxbitdist=0
+   bwd grad_input: eq=True mismatch=0/128 maxbitdist=0
+--- sinkhorn_asc_logits_p100_n8.pt ---
+   fwd out: eq=True mismatch=0/128 maxbitdist=0
+   bwd grad_input: eq=True mismatch=0/128 maxbitdist=0
+--- sinkhorn_asc_random_n1024.pt ---
+   fwd out: eq=True mismatch=0/16384 maxbitdist=0
+   bwd grad_input: eq=True mismatch=0/16384 maxbitdist=0
+--- sinkhorn_asc_random_n128.pt ---
+   fwd out: eq=True mismatch=0/2048 maxbitdist=0
+   bwd grad_input: eq=True mismatch=0/2048 maxbitdist=0
+--- sinkhorn_asc_random_n4096.pt ---
+   fwd out: eq=True mismatch=0/65536 maxbitdist=0
+   bwd grad_input: eq=True mismatch=0/65536 maxbitdist=0
+--- sinkhorn_asc_random_n8.pt ---
+   fwd out: eq=True mismatch=0/128 maxbitdist=0
+   bwd grad_input: eq=True mismatch=0/128 maxbitdist=0
+
+ALL BITWISE EQUAL
