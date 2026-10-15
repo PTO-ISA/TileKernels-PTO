@@ -283,7 +283,7 @@ def mhc_reduce_partials_and_rmsnorm_fwd_vmi(
                     token_start = elem_start // _COMPACT_REDUCE_MHC_MULT3
                     token_end = (elem_end - 1) // _COMPACT_REDUCE_MHC_MULT3
                     for token_idx in range(token_start, token_end + 1):
-                        sq_val = V.vload(sq_out_ub[token_idx], size=64, dist_mode='brc')
+                        sq_val = V.vload(sq_out_ub[token_idx], size=64, group=64, stride=1)
                         rms_val = V.vdiv(
                             one,
                             V.vsqrt(V.vadd(V.vmul(sq_val, inv_rms_group_size), V.vbrc(T.float32(rms_eps), size=64))),
@@ -377,8 +377,8 @@ def mhc_reduce_partials_and_rmsnorm_bwd_vmi(
                     for pair_idx in T.unroll(token_block // 2, explicit=True):
                         grad_pair = V.vload(out_grad_ub[pair_idx * 2, 0], size=64)
                         mul_pair = V.vload(out_mul_ub[pair_idx * 2, 0], size=64)
-                        sq_even = V.vload(sqrsum_ub[pair_idx * 2], size=64, dist_mode='brc')
-                        sq_odd = V.vload(sqrsum_ub[pair_idx * 2 + 1], size=64, dist_mode='brc')
+                        sq_even = V.vload(sqrsum_ub[pair_idx * 2], size=64, group=64, stride=1)
+                        sq_odd = V.vload(sqrsum_ub[pair_idx * 2 + 1], size=64, group=64, stride=1)
                         rms_even = V.vdiv(
                             one,
                             V.vsqrt(V.vadd(V.vmul(sq_even, inv_rms_group_size), V.vbrc(T.float32(rms_eps), size=64))),
@@ -409,7 +409,7 @@ def mhc_reduce_partials_and_rmsnorm_bwd_vmi(
                     sq_grad_compact = V.alloc_var(T.float32, size=64)
                     sq_grad_compact = V.vbrc(T.float32(0.0), size=64)
                     for token_offset in T.unroll(token_block, explicit=True):
-                        token_sq_grad = V.vload(sqrsum_grad_ub[token_offset, 0], size=64, dist_mode='brc')
+                        token_sq_grad = V.vload(sqrsum_grad_ub[token_offset, 0], size=64, group=64, stride=1)
                         token_mask = V.vcmps(lane_idx, T.int32(token_offset), mask_full, 'eq')
                         sq_grad_compact = V.vsel(token_mask, token_sq_grad, sq_grad_compact)
                     V.vstore(sq_grad_compact, sqrsum_grad_compact_ub[0])
