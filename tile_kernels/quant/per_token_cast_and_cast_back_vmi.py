@@ -1,15 +1,9 @@
 import tilelang
 from tilelang.ascend import language as T
+from tilelang.transform import PassConfigKey
 
 from tile_kernels.config import get_max_ub_per_vector_core
 from tile_kernels.quant.common import CastOutputConfig
-from tile_kernels.quant.vmi_common import (
-    FAST_MATH,
-    MX_GROUP,
-    PTO_FAST_MATH,
-    VL,
-    vdiv_with_fast_math,
-)
 from tile_kernels.utils import align
 
 # BF16 bit-field constants for power-of-two round_sf (ASC values).
@@ -17,6 +11,16 @@ _ABS_MASK_BF16 = 0x7FFF
 _BF16_EXP_BIAS = 0x7F00
 _EXP_MASK_F32 = 0x7F800000
 _F32_EXP_BIAS = 0x7F000000
+
+# MXFP8 per-group scale geometry and the PTOAS full-vector strip length,
+# inlined from the former tile_kernels.quant.vmi_common (PR #3 review).
+MX_GROUP = 32
+VL = 256
+
+# Match TileLang ASC's default for a bare S.vdiv: precise FP32 division unless a
+# caller explicitly enables fast math for the whole kernel.
+FAST_MATH = False
+PTO_FAST_MATH = {PassConfigKey.TL_ENABLE_FAST_MATH: FAST_MATH}
 
 
 def _get_block_shape(hidden: int, dtype: T.dtype, num_stages: int, num_per_channels: int) -> tuple[int, int]:
@@ -143,23 +147,27 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
                     sf_inv = T.vmi.vinterpret_cast(sf_inv_bits_u32, 'float32')
                 else:
                     ftz = use_bf16_dequant and out_config.clamp_min_value == quant_max * 2**-9
-                    sf = vdiv_with_fast_math(
-                        clamped_amax,
-                        quant_max_f32,
-                        size=64,
-                        fast_math=ftz,
-                    )
+                    if ftz:
+                        sf = T.vmi.vdiv(clamped_amax, quant_max_f32)
+                    else:
+                        sf = T.vmi.vdiv(
+                            clamped_amax,
+                            quant_max_f32,
+                            T.vmi.create_mask(64, size=64),
+                            precision='exact',
+                        )
                     if out_config.use_e4m3_sf:
                         one_f32 = T.vmi.vbrc(T.float32(1.0), size=64)
                         sf_f32 = T.vmi.vcvt(T.vmi.vcvt(T.vmi.vmins(sf, T.float32(448.0)), 'float8_e4m3fn', rounding='R', saturate='SAT'), 'float32')
                         if is_bf16_in:
                             T.vmi.vstore(T.vmi.vcvt(sf_f32, 'bfloat16'), sf_ub[sf_offset])
+                            sf_inv = T.vmi.vdiv(one_f32, sf_f32)
                         else:
                             T.vmi.vstore(sf_f32, sf_ub[sf_offset])
-                        sf_inv = vdiv_with_fast_math(one_f32, sf_f32, size=64, fast_math=is_bf16_in)
+                            sf_inv = T.vmi.vdiv(one_f32, sf_f32, T.vmi.create_mask(64, size=64), precision='exact')
                     else:
                         T.vmi.vstore(sf, sf_ub[sf_offset])
-                        sf_inv = vdiv_with_fast_math(quant_max_f32, clamped_amax, size=64, fast_math=FAST_MATH)
+                        sf_inv = T.vmi.vdiv(quant_max_f32, clamped_amax, T.vmi.create_mask(64, size=64), precision='exact')
                 if use_bf16_sf:
                     T.vmi.vstore(T.vmi.vcvt(sf_inv, 'bfloat16'), sf_inv_ub[sf_offset])
                 else:
