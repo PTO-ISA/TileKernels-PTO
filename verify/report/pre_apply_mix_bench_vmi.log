@@ -1,0 +1,49 @@
+Loading tilelang libs from dev root: /data/sunkexin/tkvmi/src/tilelang/build
+CUTLASS is not installed or found in the expected path
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/llf/Ascend/cann-9.2.0-weekly.20260902.01/cann-9.2.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/llf/Ascend/cann-9.2.0-weekly.20260902.01/cann-9.2.0/x86_64-linux/ascend_toolkit_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/llf/Ascend/cann-9.2.0-weekly.20260902.01/cann-9.2.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /data/llf/Ascend/cann-9.2.0-weekly.20260902.01/cann-9.2.0/x86_64-linux/ascend_toolkit_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.1.1, pluggy-1.7.0
+rootdir: /data/sunkexin/tkvmi/TileKernels-PTO
+configfile: pyproject.toml
+collected 30 items / 20 deselected / 10 selected
+
+../TileKernels-PTO/tests/mhc/test_pre_apply_mix.py ..........            [100%]
+
+=============================== warnings summary ===============================
+tests/mhc/test_pre_apply_mix.py::test_mhc_pre_apply_mix_bwd_benchmark[1-512-7168-4]
+  /data/sunkexin/tkvmi/TileKernels-PTO/tests/mhc/test_pre_apply_mix.py:118: UserWarning: Cannot create tensor with interal format while allow_internel_format=False, tensor will be created with base format. (Triggered internally at torch_npu/csrc/aten/common/TensorFactories.cpp:339.)
+    x_grad = torch.zeros_like(x)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== GPU Memory Auto-Classification ========================
+30 test(s) have no GPU memory profile and were conservatively classified as large_gpu_mem (Stage 2).
+Run pytest with '--refresh-mem' to measure and record their actual GPU memory usage.
+========================= Benchmark Regression Report ==========================
+Ratio = current latency / recorded latency (smaller is better)
+No baseline file found — skipping regression comparison.
+  (looked at: /data/sunkexin/tkvmi/TileKernels-PTO/tests/benchmark_baselines)
+
+Kernel                                                             Current    Bandwidth
+---------------------------------------------------------------------------------------
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-512-4096-4,]        44.5 us  1226.2 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-8192-4096-4,]      689.6 us  1265.5 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-8192-5120-4,]      863.9 us  1262.6 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-512-7168-4,]        77.8 us  1226.6 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-8192-7168-4,]     1276.2 us  1196.5 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-512-4096-4,]         17.4 us  1202.8 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-8192-4096-4,]       264.2 us  1270.7 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-8192-5120-4,]       329.2 us  1274.5 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-512-7168-4,]         29.8 us  1231.5 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-8192-7168-4,]       461.2 us  1273.6 GB/s
+---------------------------------------------------------------------------------------
+GEOMEAN                                                           187.9 us  1242.7 GB/s
+
+Total: 10 benchmarks, 0 with baselines, 10 missing, 0 regressions, 0 improvements (threshold: 5%)
+================ 10 passed, 20 deselected, 1 warning in 10.07s =================

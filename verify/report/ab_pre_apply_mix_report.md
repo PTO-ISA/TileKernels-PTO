@@ -100,6 +100,13 @@ bwd 不受此影响（其瓶颈在 x_grad 读改写与 mix_grad 跨 chunk 累加
 
 有效带宽复核：全部行 IO 带宽 0.4–1.14 TB/s，无 >4TB/s 行，无 bench 异常剔除项。
 
+**2026-10-16 补充（官方 pytest 基准）**：按 vmi-verify skill §7/§8 另跑官方
+`tests/mhc/test_pre_apply_mix.py -m benchmark --run-benchmark`（msprof 设备侧计时、
+两侧同 tkvmi env / llf CANN 9.2.0-weekly / 卡 2），**全部 10 config ratio 0.940–1.004
+达标**，详见 `pre_apply_mix_official_bench.md`（原始数据 `pre_apply_mix_bench_{asc,vmi}.jsonl`）。
+上表小 batch fwd 的 gap 在官方口径下不存在，属 npu-event 口径（含 launch 开销）
+与当时环境差异所致，两口径不可混比。
+
 ## 环境备注（沿袭 post_vmi，后续 PR/issue 素材）
 
 1. tilelang pto-dev ≥ 5f105e99 的 **ASC（非 PTO）链路**需要 CANN **9.2.0+**
