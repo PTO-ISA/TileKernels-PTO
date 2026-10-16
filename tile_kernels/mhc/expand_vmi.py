@@ -26,9 +26,17 @@ def expand_to_mhc_fwd_vmi(x, o, h_blk: int, num_stages: int, num_vec_cores: int)
         ):
             T.copy(x[pid_n, pid_h * h_blk], x_ub)
             with T.SimdVF():
-                num_chunks = h_blk // 128
+                # A logical VMI vector may span multiple 256-byte physical
+                # registers.  Use 256 lanes (512B of BF16) where possible;
+                # keep the 128-lane tail for the ASC-legal 128 alignment.
+                num_chunks = h_blk // 256
                 for c in T.serial(num_chunks):
-                    col = c * 128
+                    col = c * 256
+                    xb = V.vload(x_ub[col], size=256)
+                    for m in T.unroll(mhc, explicit=True):
+                        V.vstore(xb, o_ub[m, col])
+                if h_blk % 256 >= 128:
+                    col = num_chunks * 256
                     xb = V.vload(x_ub[col], size=128)
                     for m in T.unroll(mhc, explicit=True):
                         V.vstore(xb, o_ub[m, col])
@@ -60,9 +68,27 @@ def expand_to_mhc_bwd_vmi(o_grad, x_grad, h_blk: int, num_stages: int, num_vec_c
             T.copy(o_grad[pid_n, 0, pid_h * h_blk], o_grad_ub)
 
             with T.SimdVF():
-                num_chunks = h_blk // 64
+                # Accumulate four 256-byte FP32 registers as one logical
+                # vector.  128/64-lane tails cover all ASC-legal h_blk sizes.
+                num_chunks = h_blk // 256
                 for c in T.serial(num_chunks):
-                    col = c * 64
+                    col = c * 256
+                    acc = V.alloc_var(T.float32, size=256)
+                    acc = V.vcvt(V.vload(o_grad_ub[0, col], size=256), 'float32')
+                    for m in T.unroll(mhc - 1, explicit=True):
+                        og = V.vcvt(V.vload(o_grad_ub[m + 1, col], size=256), 'float32')
+                        acc = V.vadd(acc, og)
+                    V.vstore(V.vcvt(acc, 'bfloat16'), x_grad_ub[col])
+                if h_blk % 256 >= 128:
+                    col = num_chunks * 256
+                    acc = V.alloc_var(T.float32, size=128)
+                    acc = V.vcvt(V.vload(o_grad_ub[0, col], size=128), 'float32')
+                    for m in T.unroll(mhc - 1, explicit=True):
+                        og = V.vcvt(V.vload(o_grad_ub[m + 1, col], size=128), 'float32')
+                        acc = V.vadd(acc, og)
+                    V.vstore(V.vcvt(acc, 'bfloat16'), x_grad_ub[col])
+                if h_blk % 256 % 128 >= 64:
+                    col = num_chunks * 256 + (128 if h_blk % 256 >= 128 else 0)
                     acc = V.alloc_var(T.float32, size=64)
                     acc = V.vcvt(V.vload(o_grad_ub[0, col], size=64), 'float32')
                     for m in T.unroll(mhc - 1, explicit=True):
