@@ -1,0 +1,37 @@
+--- prebig_asc_n11021_h4096_seed0.pt ---
+   post_mix: eq=True mismatch=0/4084 maxbitdist=0
+   comb_mix: eq=True mismatch=0/16336 maxbitdist=0
+   layer_input: eq=True mismatch=0/4182016 maxbitdist=0
+--- prebig_asc_n1128_h1280_seed0.pt ---
+   post_mix: eq=True mismatch=0/512 maxbitdist=0
+   comb_mix: eq=True mismatch=0/2048 maxbitdist=0
+   layer_input: eq=True mismatch=0/163840 maxbitdist=0
+--- prebig_asc_n1128_h2560_seed0.pt ---
+   post_mix: eq=True mismatch=0/512 maxbitdist=0
+   comb_mix: eq=True mismatch=0/2048 maxbitdist=0
+   layer_input: eq=True mismatch=0/327680 maxbitdist=0
+--- prebig_asc_n1128_h4096_seed0.pt ---
+   post_mix: eq=True mismatch=0/512 maxbitdist=0
+   comb_mix: eq=True mismatch=0/2048 maxbitdist=0
+   layer_input: eq=True mismatch=0/524288 maxbitdist=0
+--- prebig_asc_n1128_h4160_seed0.pt ---
+   post_mix: eq=True mismatch=0/512 maxbitdist=0
+   comb_mix: eq=True mismatch=0/2048 maxbitdist=0
+   layer_input: eq=True mismatch=0/532480 maxbitdist=0
+--- prebig_asc_n1128_h5120_seed0.pt ---
+   post_mix: eq=True mismatch=0/512 maxbitdist=0
+   comb_mix: eq=True mismatch=0/2048 maxbitdist=0
+   layer_input: eq=True mismatch=0/655360 maxbitdist=0
+--- prebig_asc_n1128_h7168_seed0.pt ---
+   post_mix: eq=True mismatch=0/512 maxbitdist=0
+   comb_mix: eq=True mismatch=0/2048 maxbitdist=0
+   layer_input: eq=True mismatch=0/917504 maxbitdist=0
+--- prebig_asc_n116_h1280_seed0.pt ---
+   post_mix: eq=True mismatch=0/64 maxbitdist=0
+   comb_mix: eq=True mismatch=0/256 maxbitdist=0
+   layer_input: eq=True mismatch=0/20480 maxbitdist=0
+--- prebig_asc_n1512_h7168_seed0.pt ---
+   post_mix: eq=True mismatch=0/2048 maxbitdist=0
+   comb_mix: eq=True mismatch=0/8192 maxbitdist=0
+   layer_input: eq=True mismatch=0/3670016 maxbitdist=0
+ALL BITWISE EQUAL
