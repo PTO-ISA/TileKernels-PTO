@@ -1,0 +1,25 @@
+--- pre_split_asc_n01_n11001_seed0.pt ---
+  fwd pre         max_ulp(ASC,fp64)=    1.96  max_ulp(VMI,fp64)=    1.98  max_ulp(ASC,VMI)=    0.99
+  fwd post        max_ulp(ASC,fp64)=    4.61  max_ulp(VMI,fp64)=    4.61  max_ulp(ASC,VMI)=    0.99
+  bwd base_grad   max_ulp(ASC,fp64)=   81.80  max_ulp(VMI,fp64)=   81.80  max_ulp(ASC,VMI)=    1.59
+  bwd scale_grad  max_ulp(ASC,fp64)=    1.43  max_ulp(VMI,fp64)=    1.43  max_ulp(ASC,VMI)=    0.00
+--- pre_split_asc_n01_n11024_seed0.pt ---
+  fwd pre         max_ulp(ASC,fp64)=    1.96  max_ulp(VMI,fp64)=    1.96  max_ulp(ASC,VMI)=    1.00
+  fwd post        max_ulp(ASC,fp64)=    1.64  max_ulp(VMI,fp64)=    1.64  max_ulp(ASC,VMI)=    1.00
+  bwd base_grad   max_ulp(ASC,fp64)=   31.56  max_ulp(VMI,fp64)=   31.56  max_ulp(ASC,VMI)=    1.21
+  bwd scale_grad  max_ulp(ASC,fp64)=    0.84  max_ulp(VMI,fp64)=    0.84  max_ulp(ASC,VMI)=    0.00
+--- pre_split_asc_n01_n14096_seed0.pt ---
+  fwd pre         max_ulp(ASC,fp64)=    1.43  max_ulp(VMI,fp64)=    1.43  max_ulp(ASC,VMI)=    1.00
+  fwd post        max_ulp(ASC,fp64)=    1.22  max_ulp(VMI,fp64)=    1.37  max_ulp(ASC,VMI)=    0.99
+  bwd base_grad   max_ulp(ASC,fp64)=  290.58  max_ulp(VMI,fp64)=   94.45  max_ulp(ASC,VMI)=  385.03
+  bwd scale_grad  max_ulp(ASC,fp64)=    2.14  max_ulp(VMI,fp64)=    2.14  max_ulp(ASC,VMI)=    0.00
+--- pre_split_asc_n02_n11001_seed0.pt ---
+  fwd pre         max_ulp(ASC,fp64)=    2.35  max_ulp(VMI,fp64)=    2.28  max_ulp(ASC,VMI)=    1.27
+  fwd post        max_ulp(ASC,fp64)=    2.77  max_ulp(VMI,fp64)=    2.77  max_ulp(ASC,VMI)=    1.00
+  bwd base_grad   max_ulp(ASC,fp64)=    5.64  max_ulp(VMI,fp64)=    5.64  max_ulp(ASC,VMI)=    2.33
+  bwd scale_grad  max_ulp(ASC,fp64)=  110.91  max_ulp(VMI,fp64)=    6.01  max_ulp(ASC,VMI)=  104.90
+--- pre_split_asc_n02_n14096_seed0.pt ---
+  fwd pre         max_ulp(ASC,fp64)=    1.58  max_ulp(VMI,fp64)=    2.00  max_ulp(ASC,VMI)=    1.00
+  fwd post        max_ulp(ASC,fp64)=    1.76  max_ulp(VMI,fp64)=    1.76  max_ulp(ASC,VMI)=    0.91
+  bwd base_grad   max_ulp(ASC,fp64)=    7.50  max_ulp(VMI,fp64)=    7.50  max_ulp(ASC,VMI)=    2.19
+  bwd scale_grad  max_ulp(ASC,fp64)=   99.76  max_ulp(VMI,fp64)=   99.76  max_ulp(ASC,VMI)=    0.87
