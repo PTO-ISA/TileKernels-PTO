@@ -76,7 +76,16 @@ grid 为 mhc=4（hidden=4）、repeat=10、eps∈{1e-6,1e-2}、num_tokens 为 8 
 两侧外层结构相同故行为同类，不在 A/B 范围）；A/B 覆盖 {8,128,1024,4096}，
 bench 覆盖 {512,2048,8192}。
 
-## 3. 性能（验收③，flush L2，NPU Event 计时，min of 20）
+## 3. 性能（验收③）
+
+**权威结论见 `sinkhorn_bench_official.md`（官方 pytest/msprof 设备侧口径，2026-10-16
+复测）：4 config 中 3 个达标（fwd 1×512/1×8192 = 0.96/0.94、bwd 1×512 = 0.95），
+唯一低于门槛的是 bwd 1×8192（ratio 0.69，exact 除法展开所致，归因与修复路径见下）。**
+本节以下为 2026-10-15 的 npu-event 辅助口径（含 launch 开销；当时 ASC 侧基线因 CANN
+版本限制用 tl-run 旧环境，两侧环境不完全对齐，测量期服务器另有租户负载），仅作
+gap 归因的交叉证据保留。
+
+原辅助口径（flush L2，NPU Event 计时，min of 20，5 轮交替取各侧最优）：
 
 ratio = ASC_us / VMI_us，达标线 0.90。本算子 IO 极小（0.07–1.6 MB），全程
 0–25 GB/s，**计算受限**，无 >4TB/s bench 异常行。测量时服务器有其他租户负载，
