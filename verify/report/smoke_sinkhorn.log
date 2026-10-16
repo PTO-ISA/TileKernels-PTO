@@ -1,0 +1,24 @@
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+Loading tilelang libs from dev root: /data/sunkexin/tkvmi/src/tilelang/build
+CUTLASS is not installed or found in the expected path
+/data/sunkexin/tkvmi/work/smoke_sinkhorn.py:55: UserWarning: Cannot create tensor with interal format while allow_internel_format=False, tensor will be created with base format. (Triggered internally at torch_npu/csrc/aten/common/TensorFactories.cpp:339.)
+  out = torch.empty_like(x)
+PASS fwd n=8 random: n=8 eps=1e-06 max|diff|=8.941e-08 bitwise=False
+PASS fwd n=64 random: n=64 eps=1e-06 max|diff|=1.192e-07 bitwise=False
+PASS fwd n=1024 random: n=1024 eps=1e-06 max|diff|=1.788e-07 bitwise=False
+PASS fwd n=8 logits+100: n=8 eps=1e-06 max|diff|=5.960e-08 bitwise=False
+PASS fwd n=8 logits-100 eps=1e-2: n=8 eps=0.01 max|diff|=5.960e-08 bitwise=False
+PASS bwd n=8 random: n=8 eps=1e-06 max|diff|=1.192e-07
+PASS bwd n=64 random: n=64 eps=1e-06 max|diff|=1.788e-07
+PASS bwd n=1024 random: n=1024 eps=1e-06 max|diff|=2.384e-07
+PASS bwd n=8 logits+100: n=8 eps=1e-06 max|diff|=6.333e-08
+PASS bwd n=8 logits-100 eps=1e-2: n=8 eps=0.01 max|diff|=8.941e-08
+
+=== 10/10 passed ===

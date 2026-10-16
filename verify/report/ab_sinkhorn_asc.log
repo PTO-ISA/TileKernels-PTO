@@ -1,0 +1,47 @@
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tkvmi/work/ab_sinkhorn_asc_side.py:61: UserWarning: Cannot create tensor with interal format while allow_internel_format=False, tensor will be created with base format. (Triggered internally at torch_npu/csrc/aten/common/TensorFactories.cpp:339.)
+  out = torch.empty_like(x)
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:161): Immutable value `tr` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:303): Immutable value `rsum0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:304): Immutable value `rsum1_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:315): Immutable value `csum0_b_t` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:316): Immutable value `csum1_b_t` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:321): Immutable value `tr0` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:322): Immutable value `tr1` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:355): Immutable value `cs2_0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:356): Immutable value `cs2_1_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:357): Immutable value `cs2_0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:358): Immutable value `cs2_1_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:367): Immutable value `temp0` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:368): Immutable value `temp1` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:371): Immutable value `rs2_0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:35  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:372): Immutable value `rs2_1_b` is re-bound; use T.alloc_var to create a mutable variable.
+ASC done random_n8 -> /data/sunkexin/tkvmi/work/ab_artifacts/sinkhorn_asc_random_n8.pt
+ASC done random_n128 -> /data/sunkexin/tkvmi/work/ab_artifacts/sinkhorn_asc_random_n128.pt
+ASC done random_n1024 -> /data/sunkexin/tkvmi/work/ab_artifacts/sinkhorn_asc_random_n1024.pt
+ASC done random_n4096 -> /data/sunkexin/tkvmi/work/ab_artifacts/sinkhorn_asc_random_n4096.pt
+ASC done logits_p100_n8 -> /data/sunkexin/tkvmi/work/ab_artifacts/sinkhorn_asc_logits_p100_n8.pt
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:161): Immutable value `tr` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:303): Immutable value `rsum0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:304): Immutable value `rsum1_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:315): Immutable value `csum0_b_t` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:316): Immutable value `csum1_b_t` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:321): Immutable value `tr0` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:322): Immutable value `tr1` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:355): Immutable value `cs2_0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:356): Immutable value `cs2_1_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:357): Immutable value `cs2_0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:358): Immutable value `cs2_1_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:367): Immutable value `temp0` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:368): Immutable value `temp1` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:371): Immutable value `rs2_0_b` is re-bound; use T.alloc_var to create a mutable variable.
+2026-10-15 21:12:36  [TileLang:tilelang.language.eager.builder:WARNING] (sinkhorn_asc.py:372): Immutable value `rs2_1_b` is re-bound; use T.alloc_var to create a mutable variable.
+ASC done logits_m100_n8 -> /data/sunkexin/tkvmi/work/ab_artifacts/sinkhorn_asc_logits_m100_n8.pt
+ASC side complete

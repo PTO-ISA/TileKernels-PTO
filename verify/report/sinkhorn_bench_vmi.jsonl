@@ -1,0 +1,4 @@
+{"kernel": "mhc_sinkhorn", "operation": "sinkhorn_forward", "params": {"mhc": 4, "n0": 1, "n1": 512, "repeat": 10}, "param_id": "1-512-4", "source_file": "mhc/test_sinkhorn.py", "time_us": 4.78, "extras": {"io_gb": 0.0001, "num_tokens": 512}}
+{"kernel": "mhc_sinkhorn", "operation": "sinkhorn_forward", "params": {"mhc": 4, "n0": 1, "n1": 8192, "repeat": 10}, "param_id": "1-8192-4", "source_file": "mhc/test_sinkhorn.py", "time_us": 44.22, "extras": {"io_gb": 0.001, "num_tokens": 8192}}
+{"kernel": "mhc_sinkhorn", "operation": "sinkhorn_backward", "params": {"mhc": 4, "n0": 1, "n1": 512, "repeat": 10}, "param_id": "1-512-4", "source_file": "mhc/test_sinkhorn.py", "time_us": 7.35, "extras": {"io_gb": 0.0001, "num_tokens": 512}}
+{"kernel": "mhc_sinkhorn", "operation": "sinkhorn_backward", "params": {"mhc": 4, "n0": 1, "n1": 8192, "repeat": 10}, "param_id": "1-8192-4", "source_file": "mhc/test_sinkhorn.py", "time_us": 78.97, "extras": {"io_gb": 0.001, "num_tokens": 8192}}
