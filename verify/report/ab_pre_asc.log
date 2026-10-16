@@ -1,0 +1,35 @@
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0 owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+/data/sunkexin/tl-run/conda-env/lib/python3.12/site-packages/torch_npu/utils/collect_env.py:58: UserWarning: Warning: The /usr/local/Ascend/cann-9.1.0/x86_64-linux/ascend_ops_install.info owner does not match the current owner.
+  warnings.warn(f"Warning: The {path} owner does not match the current owner.")
+2026-10-15 19:39:05  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_fwd_asc` with `out_idx=None`
+2026-10-15 19:39:08  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_fwd_asc`
+2026-10-15 19:39:08  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_bwd_asc` with `out_idx=[-1]`
+2026-10-15 19:39:12  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_bwd_asc`
+ASC done n01_n1128_h1280_seed0 -> /data/sunkexin/tkvmi/work/ab_artifacts/pre_asc_n01_n1128_h1280_seed0.pt
+2026-10-15 19:39:12  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_fwd_asc` with `out_idx=None`
+2026-10-15 19:39:16  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_fwd_asc`
+2026-10-15 19:39:16  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_bwd_asc` with `out_idx=[-1]`
+2026-10-15 19:39:19  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_bwd_asc`
+ASC done n01_n1128_h2560_seed0 -> /data/sunkexin/tkvmi/work/ab_artifacts/pre_asc_n01_n1128_h2560_seed0.pt
+2026-10-15 19:39:20  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_fwd_asc` with `out_idx=None`
+2026-10-15 19:39:23  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_fwd_asc`
+2026-10-15 19:39:23  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_bwd_asc` with `out_idx=[-1]`
+2026-10-15 19:39:27  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_bwd_asc`
+ASC done n01_n1128_h4096_seed0 -> /data/sunkexin/tkvmi/work/ab_artifacts/pre_asc_n01_n1128_h4096_seed0.pt
+2026-10-15 19:39:27  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_fwd_asc` with `out_idx=None`
+2026-10-15 19:39:30  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_fwd_asc`
+2026-10-15 19:39:30  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_bwd_asc` with `out_idx=[-1]`
+2026-10-15 19:39:34  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_bwd_asc`
+ASC done n01_n1128_h5120_seed0 -> /data/sunkexin/tkvmi/work/ab_artifacts/pre_asc_n01_n1128_h5120_seed0.pt
+2026-10-15 19:39:34  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_fwd_asc` with `out_idx=None`
+2026-10-15 19:39:37  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_fwd_asc`
+2026-10-15 19:39:38  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:131): TileLang begins to compile kernel `mhc_pre_apply_mix_bwd_asc` with `out_idx=[-1]`
+2026-10-15 19:39:41  [TileLang:tilelang.jit.kernel:INFO] (kernel.py:139): TileLang completes to compile kernel `mhc_pre_apply_mix_bwd_asc`
+ASC done n01_n1128_h7168_seed0 -> /data/sunkexin/tkvmi/work/ab_artifacts/pre_asc_n01_n1128_h7168_seed0.pt
+ASC done n02_n1512_h7168_seed0 -> /data/sunkexin/tkvmi/work/ab_artifacts/pre_asc_n02_n1512_h7168_seed0.pt
+ASC side complete

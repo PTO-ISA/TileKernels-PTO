@@ -1,0 +1,39 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.1.1, pluggy-1.7.0
+rootdir: /data/sunkexin/tkvmi/TileKernels-PTO
+configfile: pyproject.toml
+collected 30 items / 20 deselected / 10 selected
+
+../TileKernels-PTO/tests/mhc/test_pre_apply_mix.py ..........            [100%]
+
+=============================== warnings summary ===============================
+tests/mhc/test_pre_apply_mix.py::test_mhc_pre_apply_mix_bwd_benchmark[1-512-7168-4]
+  /data/sunkexin/tkvmi/TileKernels-PTO/tests/mhc/test_pre_apply_mix.py:118: UserWarning: Cannot create tensor with interal format while allow_internel_format=False, tensor will be created with base format. (Triggered internally at torch_npu/csrc/aten/common/TensorFactories.cpp:339.)
+    x_grad = torch.zeros_like(x)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== GPU Memory Auto-Classification ========================
+30 test(s) have no GPU memory profile and were conservatively classified as large_gpu_mem (Stage 2).
+Run pytest with '--refresh-mem' to measure and record their actual GPU memory usage.
+========================= Benchmark Regression Report ==========================
+Ratio = current latency / recorded latency (smaller is better)
+No baseline file found — skipping regression comparison.
+  (looked at: /data/sunkexin/tkvmi/TileKernels-PTO/tests/benchmark_baselines)
+
+Kernel                                                             Current    Bandwidth
+---------------------------------------------------------------------------------------
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-512-4096-4,]        43.7 us  1247.8 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-8192-4096-4,]      686.6 us  1271.0 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-8192-5120-4,]      860.9 us  1267.1 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-512-7168-4,]        76.8 us  1243.5 GB/s
+mhc_pre_apply_mix_bwd/pre_apply_mix_backward[1-8192-7168-4,]     1199.1 us  1273.4 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-512-4096-4,]         17.5 us  1198.2 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-8192-4096-4,]       263.0 us  1276.3 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-8192-5120-4,]       327.6 us  1280.7 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-512-7168-4,]         29.9 us  1228.0 GB/s
+mhc_pre_apply_mix_fwd/pre_apply_mix_forward[1-8192-7168-4,]       459.1 us  1279.3 GB/s
+---------------------------------------------------------------------------------------
+GEOMEAN                                                           185.9 us  1256.3 GB/s
+
+Total: 10 benchmarks, 0 with baselines, 10 missing, 0 regressions, 0 improvements (threshold: 5%)
+================ 10 passed, 20 deselected, 1 warning in 45.14s =================
