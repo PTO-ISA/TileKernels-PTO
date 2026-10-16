@@ -86,12 +86,14 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
     @T.macro
     def load_sf_dintlv(sf_ub, sf_offset, lanes=VL, groups=None):
         """Load eight FP32 scales and broadcast each to 16 lanes."""
-        return T.vmi.vload(sf_ub[sf_offset], size=lanes, stride=1, dist_mode='brc', group=lanes // MX_GROUP if groups is None else groups)
+        group = lanes // MX_GROUP if groups is None else groups
+        return T.vmi.vbrc(T.vmi.vload(sf_ub[sf_offset], size=group, group=group, stride=1), size=lanes, group=group)
 
     @T.macro
     def load_sf(sf_ub, sf_offset, lanes=VL, groups=None):
         """Load eight FP32 scales and broadcast each to 32 lanes."""
-        return T.vmi.vload(sf_ub[sf_offset], size=lanes, stride=1, dist_mode='brc', group=lanes // MX_GROUP if groups is None else groups)
+        group = lanes // MX_GROUP if groups is None else groups
+        return T.vmi.vbrc(T.vmi.vload(sf_ub[sf_offset], size=group, group=group, stride=1), size=lanes, group=group)
 
     @T.macro
     def collect_amax_tile(x_ub, amax_ub, row, col, tile_k):
@@ -241,7 +243,7 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
                 for tile in T.serial(block_k // 128):
                     sf_offset = row * num_groups + tile * 8
                     if use_bf16_dequant:
-                        sf = T.vmi.vload(sf_ub[sf_offset], size=128, stride=1, dist_mode='brc', group=8)
+                        sf = T.vmi.vbrc(T.vmi.vload(sf_ub[sf_offset], size=8, group=8, stride=1), size=128, group=8)
                     else:
                         sf = load_sf_dintlv(sf_ub, sf_offset, 128, groups=8)
                     sf_inv = load_sf_dintlv(sf_inv_ub, sf_offset, 128, groups=8)
@@ -253,13 +255,13 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
         sf_offset = row * num_groups + col // 32
         if use_bf16_sf and tile_k == 256:
             values = T.vmi.vload(x_ub[row, col], size=tile_k)
-            sf_inv = T.vmi.vload(sf_inv_ub[sf_offset], size=tile_k, stride=1, dist_mode='brc', group=tile_k // MX_GROUP)
+            sf_inv = T.vmi.vbrc(T.vmi.vload(sf_inv_ub[sf_offset], size=tile_k // MX_GROUP, group=tile_k // MX_GROUP, stride=1), size=tile_k, group=tile_k // MX_GROUP)
             scaled = T.vmi.vmul(values, sf_inv)
             sf = get_sf_from_inv(sf_inv, sf_inv_bias)
             T.vmi.vstore(cast_and_cast_back_bf16(scaled, sf), out_ub[row, col])
         elif use_bf16_sf:
             values = T.vmi.vload(x_ub[row, col], size=tile_k)
-            sf_inv = T.vmi.vload(sf_inv_ub[sf_offset], size=tile_k, stride=1, dist_mode='brc', group=tile_k // MX_GROUP)
+            sf_inv = T.vmi.vbrc(T.vmi.vload(sf_inv_ub[sf_offset], size=tile_k // MX_GROUP, group=tile_k // MX_GROUP, stride=1), size=tile_k, group=tile_k // MX_GROUP)
             scaled = T.vmi.vmul(values, sf_inv)
             sf = get_sf_from_inv(sf_inv, sf_inv_bias)
             T.vmi.vstore(cast_and_cast_back_bf16(scaled, sf), out_ub[row, col])
