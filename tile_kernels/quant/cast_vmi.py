@@ -71,17 +71,17 @@ def get_cast_kernel_vmi(
 
     # process 1024B elements a time -> vectors arith in hash is 256B wide
     @T.macro
-    def process_chunk(in_chunk, eo, tmp, base_e):
+    def process_chunk(t0, t1, t2, t3, base_e):
         mask64 = V.create_mask(64, size=64)
-        # even/odd halves (eo, fed to the round); stride-4 classes (tmp, fed to the hash)
-        eo[0], eo[1] = V.vdintlv(in_chunk[0], in_chunk[1], mask64)
-        eo[2], eo[3] = V.vdintlv(in_chunk[2], in_chunk[3], mask64)
-        tmp[0], tmp[2] = V.vdintlv(eo[0], eo[2], mask64)
-        tmp[1], tmp[3] = V.vdintlv(eo[1], eo[3], mask64)
-        h1, h2 = rbits_hash(tmp, base_e)
+        # level-1 even/odd split (fed to the round); level-2 stride-4 classes (fed to the hash)
+        e0, o0 = V.vdintlv(t0, t1, mask64)
+        e1, o1 = V.vdintlv(t2, t3, mask64)
+        c0, c2 = V.vdintlv(e0, e1, mask64)
+        c1, c3 = V.vdintlv(o0, o1, mask64)
+        h1, h2 = rbits_hash([c0, c1, c2, c3], base_e)
         r_evens, r_odds = rbits_even_odd(h1, h2)
-        res_evens = stochastic_round(eo[0], eo[2], r_evens)
-        res_odds = stochastic_round(eo[1], eo[3], r_odds)
+        res_evens = stochastic_round(e0, e1, r_evens)
+        res_odds = stochastic_round(o0, o1, r_odds)
         # vzip pairs lane i of the even/odd results into adjacent 16-bit halves -> element order
         return V.vinterpret_cast(V.vzip(res_evens, res_odds), 'bfloat16')
 
@@ -90,14 +90,13 @@ def get_cast_kernel_vmi(
     def convert_half(x_ub, y_ub, dest, base_id):
         with T.SimdVF():
             mask256 = V.create_mask(256, size=256)
-            in_chunk = V.alloc_local((4,), V.vreg(64, T.uint32))
-            eo = V.alloc_local((4,), V.vreg(64, T.uint32))
-            tmp = V.alloc_local((4,), V.vreg(64, T.uint32))
             for i in T.unroll(half_reps):
                 offset = i * vec_len
-                for j in T.unroll(4, explicit=True):
-                    in_chunk[j] = V.vinterpret_cast(V.vload(x_ub[offset + j * vec_len // 4], size=64), 'uint32')
-                res = process_chunk(in_chunk, eo, tmp, T.uint32((base_id + offset) // 4))
+                t0 = V.vinterpret_cast(V.vload(x_ub[offset], size=64), 'uint32')
+                t1 = V.vinterpret_cast(V.vload(x_ub[offset + vec_len // 4], size=64), 'uint32')
+                t2 = V.vinterpret_cast(V.vload(x_ub[offset + vec_len // 2], size=64), 'uint32')
+                t3 = V.vinterpret_cast(V.vload(x_ub[offset + 3 * (vec_len // 4)], size=64), 'uint32')
+                res = process_chunk(t0, t1, t2, t3, T.uint32((base_id + offset) // 4))
                 V.vstore(res, y_ub[dest + offset], mask256)
 
     # process a block: copyin x -> front_ub + back_ub; casted bf16 -> front_ub; (read next loop using back_ub); copyout front_ub -> y
