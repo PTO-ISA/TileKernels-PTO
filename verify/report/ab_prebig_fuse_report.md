@@ -63,6 +63,9 @@ h∈{1280,2560,4096,4160,5120,7168} 组合，三个输出 `post_mix`(fp32)、
 
 ## 三、性能（discussion #1616 验收 3）
 
+> **2026-10-16 补：官方 pytest 基准复验（最终口径）见第五节——5/5 config ratio≥1.00 全部达标，
+> 本节 npu-event 口径的"n1=512 低于门槛"结论被其推翻（当时卡 0 共驻干扰 + 含 launch 开销）。**
+
 `bench_prebig_side.py`：每侧 5 warmup + 20 次计时，每次先 memset 512MB flush L2；
 min 为 20 次最小值，amort50 为 50 连发摊销（kernel 本体，无逐发 launch 噪声）。
 有效带宽全部 ≤ ~1TB/s，无 >4TB/s 的 bench 异常行。
@@ -117,3 +120,51 @@ python verify/diff_prebig_outer.py                # 外层调度 AST 一致性
 ```
 
 产物：`verify/report/{smoke_prebig.log, ab_prebig_vmi.log, bench_prebig_asc.json, bench_prebig_vmi.json}`
+
+## 五、官方 pytest 基准复验（2026-10-16，最终性能口径）
+
+按 vmi-verify skill 第七节：ASC 侧原生 dispatch 直接跑 pytest，VMI 侧用通用劫持模板
+（`verify/run_pre_big_fuse_bench.py`，劫持 `tile_kernels.mhc.pre_big_fuse_asc` 的
+`mhc_pre_big_fuse_fwd`）跑同一条命令；计时 = 仓库 benchmark 插件的 `do_bench(msprof)`
+**设备侧 kernel 时间**（torch_npu.profiler + tilelang L2 flush kernel，不含 launch 开销，
+与第三节 npu-event 口径不可混表）。**两侧均加 `TILELANG_DISABLE_CACHE=1`**，进程内全新
+编译后计时，杜绝缓存产物串扰（见下方"首跑异常"）。JSONL 落盘
+`work/pre_big_fuse_bench_{asc,vmi}.jsonl`（该文件为追加式，最终数据前已清空重写）。
+
+| n1 | h | ASC_us | VMI_us | ratio | ASC 带宽 | VMI 带宽 | 结论 |
+|---|---|---|---|---|---|---|---|
+| 512 | 4096 | 18.7 | 18.6 | **1.005** | 1127 GB/s | 1130 GB/s | **达标** |
+| 512 | 7168 | 31.8 | 31.3 | **1.016** | 1158 GB/s | 1177 GB/s | **达标** |
+| 8192 | 4096 | 268.8 | 268.1 | **1.003** | 1254 GB/s | 1257 GB/s | **达标** |
+| 8192 | 5120 | 335.6 | 335.1 | **1.001** | 1254 GB/s | 1256 GB/s | **达标** |
+| 8192 | 7168 | 466.6 | 466.2 | **1.001** | 1262 GB/s | 1263 GB/s | **达标** |
+
+- GEOMEAN：ASC 120.1us / VMI 119.5us（1210 vs 1215 GB/s），VMI 全 config 略优。
+- 带宽全部 ≤1.26TB/s，无 >4TB/s 的 bench 异常行。
+- **结论：5/5 config（= 全部 ASC-legal bench config）ratio≥0.90，达标；与 ASC 逐位一致 +
+  官方基准达标，本算子验收三项全部通过。**
+
+### 首跑异常与排查记录（方法论）
+
+当天第一次 VMI 侧劫持跑曾得到 58.4/74.2/415.2/468.8us 的虚高数字（当天该卡首批 VMI
+执行、紧随 22.6s 进程内编译后计时）。后续 5+ 次复跑、独立缓存目录冷跑、以及
+`TILELANG_DISABLE_CACHE=1` 进程内现场编译跑全部稳定复现 ≈ASC 的数字（例如 512-4096
+= 18.6–18.7us），且劫持经 spy 包裹验证确系 VMI jit 函数被调用 137 次。故判定首跑为瞬态
+异常，最终数据取自上表同条件成对复验。**教训：VMI 侧首跑（冷编译后立即计时）数字不可
+直接采信，须复跑确认。**
+
+### 环境
+
+- 卡：NPU 2（Ascend950PR，0000:61:00.0），跑前跑后 npu-smi 均 Health OK（前序共驻进程
+  已退出后开跑；跑后 186.5W / 59°C / util 0）
+- CANN：`/data/llf/Ascend/cann-9.2.0-weekly.20260902.01/cann-9.2.0`（2026-08-30 周构建，
+  bisheng 含 `asc_pack_to_high`，msprof 计时正常）
+- 工具链：tilelang pto-dev@5f105e99 + ptoas 0.68@d4f1c8a5d（tkvmi conda env，editable），
+  pytest 9.1.1
+- 代码：ASC 侧 `pre_big_fuse_asc.py`@vmi-impl(66258df) 原样；VMI 侧 `pre_big_fuse_vmi`
+  分支（96dff8b），238 树 md5 与本地提交一致（83da2415989748b3a2f26ac42962b1df）
+- 复现：`source <CANN>/set_env.sh; export ASCEND_RT_VISIBLE_DEVICES=2 TMPDIR=...
+  PATH=<env>/bin:$PATH TILELANG_DISABLE_CACHE=1; cd TileKernels-PTO;
+  pytest tests/mhc/test_pre_big_fuse.py -m benchmark --run-benchmark
+  --benchmark-output=work/pre_big_fuse_bench_asc.jsonl`（VMI 侧换
+  `python work/run_pre_big_fuse_bench.py vmi`）
