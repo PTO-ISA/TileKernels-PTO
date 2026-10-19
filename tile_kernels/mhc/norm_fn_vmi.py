@@ -46,18 +46,12 @@ def mhc_fn_normw_merge_fwd_vmi(
             T.copy(normw[hidden_offset : hidden_offset + hidden_block], normw_ub)
 
             with T.SimdVF():
-                # out_fn = fn * normw over full 64-lane fp32 vectors, so every
-                # elementwise op runs unmasked.
                 for vec_pair in range(hidden_block // 128):
-                    col0 = vec_pair * 128
-                    col1 = col0 + 64
-                    normw0 = V.vload(normw_ub[col0], size=64)
-                    normw1 = V.vload(normw_ub[col1], size=64)
+                    col = vec_pair * 128
+                    normw_v = V.vload(normw_ub[col], size=128)
                     for row in range(mhc_mult3):
-                        fn0 = V.vload(fn_ub[row, col0], size=64)
-                        fn1 = V.vload(fn_ub[row, col1], size=64)
-                        V.vstore(V.vmul(fn0, normw0), out_fn_ub[row, col0])
-                        V.vstore(V.vmul(fn1, normw1), out_fn_ub[row, col1])
+                        fn_v = V.vload(fn_ub[row, col], size=128)
+                        V.vstore(V.vmul(fn_v, normw_v), out_fn_ub[row, col])
 
             T.copy(out_fn_ub, out_fn[:mhc_mult3, hidden_offset : hidden_offset + hidden_block])
 
@@ -111,36 +105,22 @@ def mhc_fn_normw_merge_bwd_vmi(
             T.copy(normw_grad[hidden_offset : hidden_offset + hidden_block], normw_grad_ub)
 
             with T.SimdVF():
-                # fn_grad += out_fn_grad * normw; normw_grad accumulates
-                # out_fn_grad * fn across rows.  Full 64-lane fp32 vectors.
                 for vec_pair in range(hidden_block // 128):
-                    col0 = vec_pair * 128
-                    col1 = col0 + 64
-                    normw0 = V.vload(normw_ub[col0], size=64)
-                    normw1 = V.vload(normw_ub[col1], size=64)
-                    normw_grad0 = V.alloc_var(T.float32, size=64)
-                    normw_grad1 = V.alloc_var(T.float32, size=64)
-                    normw_grad0 = V.vload(normw_grad_ub[col0], size=64)
-                    normw_grad1 = V.vload(normw_grad_ub[col1], size=64)
+                    col = vec_pair * 128
+                    normw_v = V.vload(normw_ub[col], size=128)
+                    normw_grad_acc = V.alloc_var(T.float32, size=128)
+                    normw_grad_acc = V.vload(normw_grad_ub[col], size=128)
 
                     for row in range(mhc_mult3):
-                        out_grad0 = V.vload(out_fn_grad_ub[row, col0], size=64)
-                        out_grad1 = V.vload(out_fn_grad_ub[row, col1], size=64)
-                        fn0 = V.vload(fn_ub[row, col0], size=64)
-                        fn1 = V.vload(fn_ub[row, col1], size=64)
-                        fn_grad0 = V.vload(fn_grad_ub[row, col0], size=64)
-                        fn_grad1 = V.vload(fn_grad_ub[row, col1], size=64)
+                        out_grad = V.vload(out_fn_grad_ub[row, col], size=128)
+                        fn_v = V.vload(fn_ub[row, col], size=128)
+                        fn_grad_v = V.vload(fn_grad_ub[row, col], size=128)
 
-                        fn_grad_out0 = V.vadd(fn_grad0, V.vmul(out_grad0, normw0))
-                        fn_grad_out1 = V.vadd(fn_grad1, V.vmul(out_grad1, normw1))
-                        normw_grad0 = V.vadd(normw_grad0, V.vmul(out_grad0, fn0))
-                        normw_grad1 = V.vadd(normw_grad1, V.vmul(out_grad1, fn1))
+                        fn_grad_out = V.vadd(fn_grad_v, V.vmul(out_grad, normw_v))
+                        normw_grad_acc = V.vadd(normw_grad_acc, V.vmul(out_grad, fn_v))
+                        V.vstore(fn_grad_out, fn_grad_ub[row, col])
 
-                        V.vstore(fn_grad_out0, fn_grad_ub[row, col0])
-                        V.vstore(fn_grad_out1, fn_grad_ub[row, col1])
-
-                    V.vstore(normw_grad0, normw_grad_ub[col0])
-                    V.vstore(normw_grad1, normw_grad_ub[col1])
+                    V.vstore(normw_grad_acc, normw_grad_ub[col])
 
             T.copy(fn_grad_ub, fn_grad[:mhc_mult3, hidden_offset : hidden_offset + hidden_block])
             T.copy(normw_grad_ub, normw_grad[hidden_offset : hidden_offset + hidden_block])
