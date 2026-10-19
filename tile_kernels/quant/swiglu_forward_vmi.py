@@ -34,6 +34,7 @@ def get_swiglu_forward_kernel_vmi(
     assert not with_routed_scaling or with_weight
     assert hidden % 128 == 0, f'Ascend swiglu requires hidden % 128 == 0, got {hidden}'
     assert not out_config.use_tma_aligned_col_major_sf or out_config.use_packed_ue8m0
+    assert not out_config.use_packed_ue8m0 or out_config.round_sf
     if out_config.with_sf:
         assert out_config.sf_block == (1, 32), 'Ascend swiglu only supports sf_block=(1, 32)'
 
@@ -59,8 +60,15 @@ def get_swiglu_forward_kernel_vmi(
     pack_factor = get_packed_ue8m0_pack_factor()
 
     @T.macro
-    def vdiv_0ulp(a, b):
-        """Correct a / b to 0 ULP (same algorithm as the ASC backward source)."""
+    def vdiv_exact_0ulp(a, b):
+        """Correct a / b to 0 ULP (the ASC exact path).
+
+        Starts from the hardware quotient and searches the two neighboring
+        representables, matching the ASC ``vdiv_0ulp`` algorithm. This
+        intentionally does not call ``V.vdiv(precision='exact')``: that built-in
+        expansion is a different (slower) software algorithm and would be
+        redundant here.
+        """
         full = V.create_mask(vec_size, size=vec_size)
         z = V.vdiv(a, b, full)
         y = V.vneg(b)
@@ -190,8 +198,10 @@ def get_swiglu_forward_kernel_vmi(
                     denominator = V.vadds(V.vexpdif(zeros, silu_l, full), T.float32(1.0), full)
                     if precision == 'ftz_true':
                         quotient = V.vdiv(silu_l, denominator, full)
+                    elif precision == 'exact':
+                        quotient = vdiv_exact_0ulp(silu_l, denominator)
                     else:
-                        quotient = vdiv_0ulp(silu_l, denominator)
+                        raise ValueError(f"unsupported vdiv precision {precision!r}; expected 'ftz_true' or 'exact'")
                     val = V.vmul(quotient, mul_r, full)
                     out_val = V.vmuls(val, weight, full) if with_weight else val
 

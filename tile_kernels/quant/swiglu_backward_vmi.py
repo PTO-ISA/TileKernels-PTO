@@ -75,8 +75,15 @@ def get_swiglu_backward_kernel_vmi(
     x_grad_fp8_shape = (num_expanded_tokens, hidden * 2) if with_quant else (1, 1)
 
     @T.macro
-    def vdiv_0ulp(a, b):
-        """Correct a / b to 0 ULP (same algorithm as the ASC source)."""
+    def vdiv_exact_0ulp(a, b):
+        """Correct a / b to 0 ULP (the ASC exact path).
+
+        Starts from the hardware quotient and searches the two neighboring
+        representables, matching the ASC ``vdiv_0ulp`` algorithm. This
+        intentionally does not call ``V.vdiv(precision='exact')``: that built-in
+        expansion is a different (slower) software algorithm and would be
+        redundant here.
+        """
         full = V.create_mask(vec_size, size=vec_size)
         z = V.vdiv(a, b, full)
         y = V.vneg(b)
@@ -101,11 +108,15 @@ def get_swiglu_backward_kernel_vmi(
         return V.vsel(is_zero, z, corrected)
 
     @T.macro
-    def sigmoid_vdiv_0ulp(a, b):
-        """Correct a / b for sigmoid (same algorithm as the ASC source).
+    def sigmoid_vdiv_exact_0ulp(a, b):
+        """Correct a / b for sigmoid to 0 ULP (the ASC sigmoid algorithm).
 
-        PTO vmi.vsel only accepts vector-register operands, so the predicate
-        xor is materialized as int32 vectors.
+        Starts from the hardware quotient and checks the adjacent representable,
+        matching the ASC ``sigmoid_vdiv_0ulp`` algorithm. This intentionally
+        does not call ``V.vdiv(precision='exact')``; the ASC source uses this
+        cheaper specialized correction for the sigmoid. PTO ``vmi.vsel`` only
+        accepts vector-register operands, so the predicate xor is materialized
+        as int32 vectors.
         """
         full = V.create_mask(vec_size, size=vec_size)
         one_i32 = V.vbrc(T.int32(1), size=vec_size)
@@ -382,10 +393,10 @@ def get_swiglu_backward_kernel_vmi(
                                     y_compute_value = y_value
 
                                 sigmoid_denominator = V.vadds(V.vexpdif(zeros, x_compute_value, full), T.float32(1.0), full)
-                                sigmoid = sigmoid_vdiv_0ulp(ones, sigmoid_denominator)
+                                sigmoid = sigmoid_vdiv_exact_0ulp(ones, sigmoid_denominator)
                                 if with_weight or do_recompute:
                                     # Keep a separate 0-ULP division for the required FP32 rounding.
-                                    act_value = V.vmul(vdiv_0ulp(x_compute_value, sigmoid_denominator), y_compute_value, full)
+                                    act_value = V.vmul(vdiv_exact_0ulp(x_compute_value, sigmoid_denominator), y_compute_value, full)
                                 if with_weight:
                                     weight_contribution = V.vmul(grad, act_value, full)
                                     weight_value = V.vmuls(weight_contribution, valid_token_f32, full) if num_experts else weight_contribution
