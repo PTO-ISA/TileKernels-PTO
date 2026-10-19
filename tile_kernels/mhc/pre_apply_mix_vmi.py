@@ -29,9 +29,11 @@ Key ASC -> VMI correspondences used here (same set as the post_vmi port):
   128 lanes per iteration — one iteration covers two ASC 64-lane chunks
   (ASC's 64-lane granularity was the physical fp32 register width; 128 is
   in VMI's legal lane set).  Per-element operation order is unchanged, so
-  fwd output stays bitwise identical to ASC; a 64-lane tail chunk covers
-  ``h_blk % 128 == 64`` shapes.  bwd stays at 64 lanes because widening its
-  cross-lane ``vcadd`` reduction would change the summation association.
+  fwd output stays bitwise identical to ASC.  h_blk is a multiple of 128
+  for every dispatch config (hidden is a multiple of 256; h_blk is hidden,
+  hidden/2 or 6144), so no tail handling is needed.  bwd stays at 64 lanes
+  because widening its cross-lane ``vcadd`` reduction would change the
+  summation association.
 """
 
 import tilelang
@@ -72,8 +74,10 @@ def mhc_pre_apply_mix_fwd_vmi(x, mix, o, h_blk, num_vec_cores: int):
                 # covers two ASC 64-lane chunks (VMI's legal lane set includes
                 # 128; ASC was capped at 64 by the physical register width).
                 # The per-element operation order is unchanged, so the result
-                # stays bitwise identical to ASC.  h_blk is 64-aligned, so the
-                # only possible remainder is exactly one 64-lane tail chunk.
+                # stays bitwise identical to ASC.  Every dispatch config
+                # yields an h_blk that is a multiple of 128 (hidden is a
+                # multiple of 256; h_blk is hidden, hidden/2 or 6144), so no
+                # tail chunk is needed.
                 # Preload the mix scalars as broadcast registers once per token-tile.
                 mix_reg = V.alloc_local((mhc,), V.vreg(128, T.float32))
                 for m in T.unroll(mhc, explicit=True):
@@ -89,23 +93,6 @@ def mhc_pre_apply_mix_fwd_vmi(x, mix, o, h_blk, num_vec_cores: int):
                     for m in T.unroll(mhc - 1, explicit=True):
                         acc = V.vmula(acc, xs[m + 1], mix_reg[m + 1], mask_full)
                     V.vstore(V.vcvt(acc, 'bfloat16'), o_ub[col])
-                if h_blk % 128 == 64:
-                    # 64-lane tail chunk with its own 64-wide broadcasts (vcvt
-                    # cannot be masked, so the tail keeps a 64-lane load to
-                    # avoid reading past the row end).
-                    col = (h_blk // 128) * 128
-                    mix_reg64 = V.alloc_local((mhc,), V.vreg(64, T.float32))
-                    for m in T.unroll(mhc, explicit=True):
-                        mix_reg64[m] = V.vbrc(V.vload(mix_ub[m], size=1), size=64)
-                    xs64 = V.alloc_local((mhc,), V.vreg(64, T.float32))
-                    acc64 = V.alloc_var(T.float32, size=64)
-                    mask64 = V.create_mask(64, size=64)
-                    for m in T.unroll(mhc, explicit=True):
-                        xs64[m] = V.vcvt(V.vload(x_ub[m, col], size=64), 'float32')
-                    acc64 = V.vmul(xs64[0], mix_reg64[0])
-                    for m in T.unroll(mhc - 1, explicit=True):
-                        acc64 = V.vmula(acc64, xs64[m + 1], mix_reg64[m + 1], mask64)
-                    V.vstore(V.vcvt(acc64, 'bfloat16'), o_ub[col])
 
             T.copy(o_ub, o[pid_n, pid_h * h_blk])
 
