@@ -1,11 +1,3 @@
-"""VMI port of the mhc norm_fn kernels (discussion #1616).
-
-Each kernel is the ASC original with only the ``T.SimdVF()`` bodies rewritten
-in logical VMI vectors; the outer schedule (T.Kernel / T.Persistent / T.copy /
-UB layout / num_stages) and the host contract are kept verbatim from
-``norm_fn_asc.py`` so ASC and VMI stay directly comparable.
-"""
-
 import tilelang
 from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
