@@ -117,20 +117,24 @@ def mhc_pre_split_mixes_fwd_simd_mhc4_vmi(
                 post_base_vec = zeros
                 comb_base_vec = zeros
 
-                # PTODSL range/T.serial loop variables are index-typed and
-                # cannot feed VMI vector ops (vbrc/vcmps would build
-                # vreg<64xindex>); T.unroll(..., explicit=True) folds the
-                # constant trip counts at trace time so the base ids stay
-                # si32 constants.  Same iterations, same order.
-                for base_id in T.unroll(4, explicit=True):
+                for base_id in range(4):
                     base_mask = V.vcmps(col3, T.int32(base_id), mask_full, 'eq')
                     pre_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id, 0], size=1), size=64), pre_base_vec)
                     post_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 4, 0], size=1), size=64), post_base_vec)
 
-                for base_id in T.unroll(16, explicit=True):
+                for base_id in range(16):
                     base_mask = V.vcmps(col15, T.int32(base_id), mask_full, 'eq')
                     comb_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 8, 0], size=1), size=64), comb_base_vec)
 
+                # PTODSL range/T.serial loop variables are index-typed and
+                # cannot feed VMI ops that derive an element type from the
+                # scalar operand -- V.vbrc(T.int32(vec_id * c), ...) would
+                # build an illegal vreg<64xindex> and ptoas asserts.  The vec
+                # loops therefore stay T.unroll(..., explicit=True) so the
+                # loop-variable arithmetic folds to si32 constants; the base
+                # chains above only use their loop variable in vcmps scalars
+                # and vload addresses, which accept it, so they keep the ASC
+                # range() form.  Same iterations, same order either way.
                 for vec_id in T.unroll(4, explicit=True):
                     token = V.vadd(V.vshr(idx, V.vbrc(T.int32(2), size=64)), V.vbrc(T.int32(vec_id * 16), size=64))
                     token_offset = V.vadd(V.vshl(token, V.vbrc(T.int32(4), size=64)), V.vshl(token, V.vbrc(T.int32(3), size=64)))
@@ -262,11 +266,11 @@ def mhc_pre_split_mixes_bwd_mhc4_vmi(
                 pre_base_vec = zeros
                 post_base_vec = zeros
                 comb_base_vec = zeros
-                for base_id in T.unroll(4, explicit=True):
+                for base_id in range(4):
                     base_mask = V.vcmps(col3, T.int32(base_id), mask_full, 'eq')
                     pre_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id, 0], size=1), size=64), pre_base_vec)
                     post_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 4, 0], size=1), size=64), post_base_vec)
-                for base_id in T.unroll(16, explicit=True):
+                for base_id in range(16):
                     base_mask = V.vcmps(col15, T.int32(base_id), mask_full, 'eq')
                     comb_base_vec = V.vsel(base_mask, V.vbrc(V.vload(base_ub[base_id + 8, 0], size=1), size=64), comb_base_vec)
 
