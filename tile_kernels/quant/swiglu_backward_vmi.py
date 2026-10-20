@@ -488,12 +488,17 @@ def get_swiglu_backward_kernel_vmi(
                                     V.vstore(V.vcvt(y_grad_quant_value, 'bfloat16'), y_grad_ub[col])
                                     x_scaled = V.vsel(valid_token_mask, x_scaled_value, zeros) if num_experts else x_scaled_value
                                     y_scaled = V.vsel(valid_token_mask, y_scaled_value, zeros) if num_experts else y_scaled_value
-                                    # ASC's FP8 conversion keeps non-finite values as
-                                    # NaN; PTODSL's SAT would clamp them. NOSAT matches
-                                    # ASC for non-finite inputs and for finite results
-                                    # at the 448 boundary.
-                                    V.vstore(V.vcvt(x_scaled, 'float8_e4m3fn', rounding='R', saturate='NOSAT'), x_grad_fp8_ub[col])
-                                    V.vstore(V.vcvt(y_scaled, 'float8_e4m3fn', rounding='R', saturate='NOSAT'), y_grad_fp8_ub[col])
+                                    # Faithful translation of ASC S.vcvt(sat=True).
+                                    # Toolchain caveat: on this build ASC's RS_ENABLE
+                                    # behaves like NOSAT for narrowing conversions
+                                    # (non-finite -> NaN), while VMI SAT really
+                                    # saturates. This is a toolchain inconsistency,
+                                    # not a semantic choice; see repro_fp8_saturate.py
+                                    # and the upstream issue draft. Do not "fix" it by
+                                    # switching to NOSAT. Finite values are unaffected:
+                                    # value <= 448*(1+2^-23) << 464, the RNE threshold.
+                                    V.vstore(V.vcvt(x_scaled, 'float8_e4m3fn', rounding='R', saturate='SAT'), x_grad_fp8_ub[col])
+                                    V.vstore(V.vcvt(y_scaled, 'float8_e4m3fn', rounding='R', saturate='SAT'), y_grad_fp8_ub[col])
 
                         T.copy(x_grad_ub, x_grad[token_id, col_offset : col_offset + block_k])
                         T.copy(y_grad_ub, x_grad[token_id, hidden + col_offset : hidden + col_offset + block_k])

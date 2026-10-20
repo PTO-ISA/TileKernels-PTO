@@ -67,6 +67,9 @@ def get_swiglu_forward_kernel_vmi(
 
         The ``lt`` tie-break matches the built-in exact path used by ASC
         forward. ASC backward intentionally uses ``le``; do not unify them.
+        No kernel-level input in this port has been shown to reach an exact
+        midpoint tie (b is a transcendental result); the subnormal sweep in
+        review_adversarial_ab.py does not claim to cover that branch.
         """
         full = V.create_mask(vec_size, size=vec_size)
         z = V.vdiv(a, b, full)
@@ -269,14 +272,19 @@ def get_swiglu_forward_kernel_vmi(
                     col = (vector_base + vector) * vec_size
                     inverse_indices = V.vadds(group_lane, T.int32(vector * 2), full)
                     expanded_inverse = V.vselr(inverses, inverse_indices)
-                    # ASC's FP8 conversion keeps non-finite values as NaN;
-                    # PTODSL's SAT would clamp them. NOSAT matches ASC for both
-                    # non-finite values and finite results at the 448 boundary.
+                    # Faithful translation of ASC S.vcvt(sat=True). Toolchain
+                    # caveat: on this build ASC's RS_ENABLE behaves like NOSAT
+                    # for narrowing conversions (non-finite -> NaN), while VMI
+                    # SAT really saturates. This is a toolchain inconsistency,
+                    # not a semantic choice; see repro_fp8_saturate.py and the
+                    # upstream issue draft. Do not "fix" it by switching to
+                    # NOSAT. Finite values are unaffected: value <=
+                    # 448*(1+2^-23) << 464, the RNE overflow threshold.
                     quantized = V.vcvt(
                         V.vmul(V.vload(values_ub[col], size=vec_size), expanded_inverse),
                         'float8_e4m3fn',
                         rounding='R',
-                        saturate='NOSAT',
+                        saturate='SAT',
                     )
                     V.vstore(quantized, out_ub[col])
 
