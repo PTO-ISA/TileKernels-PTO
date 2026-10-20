@@ -1,5 +1,3 @@
-"""Logical-vector implementation of the Ascend top-k gate kernel."""
-
 import tilelang
 from tilelang.ascend import language as T
 from tilelang.ascend.language import simd as S
