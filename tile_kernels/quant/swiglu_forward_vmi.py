@@ -4,17 +4,12 @@ import tilelang
 from tilelang.ascend import language as T
 from tilelang.ascend.language import simd as S
 from tilelang.ascend.language import vmi as V
-from tilelang.transform import PassConfigKey
 
 from tile_kernels.quant.common import CastOutputConfig, get_packed_ue8m0_pack_factor, get_sf_shape
 from tile_kernels.utils import align
 
-# Match the ASC source of truth: bare S.vdiv is precise unless fast math is
-# explicitly enabled. PTO VMI's hardware vdiv is the explicit 'ftz_true' path.
-PTO_FAST_MATH = {PassConfigKey.TL_ENABLE_FAST_MATH: False}
 
-
-@tilelang.jit(target='pto', pass_configs=PTO_FAST_MATH)
+@tilelang.jit(target='pto')
 def get_swiglu_forward_kernel_vmi(
     hidden: int,
     num_experts: int,
@@ -34,7 +29,6 @@ def get_swiglu_forward_kernel_vmi(
     assert not with_routed_scaling or with_weight
     assert hidden % 128 == 0, f'Ascend swiglu requires hidden % 128 == 0, got {hidden}'
     assert not out_config.use_tma_aligned_col_major_sf or out_config.use_packed_ue8m0
-    assert not out_config.use_packed_ue8m0 or out_config.round_sf
     if out_config.with_sf:
         assert out_config.sf_block == (1, 32), 'Ascend swiglu only supports sf_block=(1, 32)'
 
@@ -61,30 +55,32 @@ def get_swiglu_forward_kernel_vmi(
 
     @T.macro
     def vdiv_exact_0ulp(a, b):
-        """Correct a / b to 0 ULP (the ASC exact path).
+        """Correct a / b to 0 ULP with ASC forward exact-division semantics.
 
-        Starts from the hardware quotient and searches the two neighboring
-        representables, matching the ASC ``vdiv_0ulp`` algorithm. This
-        intentionally does not call ``V.vdiv(precision='exact')``: that built-in
-        expansion is a different (slower) software algorithm and would be
-        redundant here.
+        This is the same neighbor search as CANN ``vdiv_0ulp_ftz_true`` (the
+        expansion behind ``V.vdiv(precision='exact')``) without its denominator
+        prescaling. In this kernel b = 1 + exp(-silu_l) >= 1, so the prescale is
+        a power of two <= 1 and preserves residual ordering, while
+        |z * b| ~= |a| cannot overflow the FMA. The built-in inf/nan fallback is
+        also unnecessary: non-finite z makes every residual comparison false and
+        is returned unchanged, while z == 0 is handled by the signed-zero check.
+
+        The ``lt`` tie-break matches the built-in exact path used by ASC
+        forward. ASC backward intentionally uses ``le``; do not unify them.
         """
         full = V.create_mask(vec_size, size=vec_size)
         z = V.vdiv(a, b, full)
         y = V.vneg(b)
-        r = V.alloc_var(T.float32, size=vec_size)
         r = V.vmula(a, z, y, full)
         z_bits = V.vinterpret_cast(z, 'int32')
         z_pre = V.vinterpret_cast(V.vadds(z_bits, T.int32(-1), full), 'float32')
         z_next = V.vinterpret_cast(V.vadds(z_bits, T.int32(1), full), 'float32')
-        r_pre = V.alloc_var(T.float32, size=vec_size)
         r_pre = V.vmula(a, z_pre, y, full)
-        r_next = V.alloc_var(T.float32, size=vec_size)
         r_next = V.vmula(a, z_next, y, full)
         r = V.vabs(r)
         r_pre = V.vabs(r_pre)
         r_next = V.vabs(r_next)
-        take_pre = V.vcmp(r_pre, r, full, 'le')
+        take_pre = V.vcmp(r_pre, r, full, 'lt')
         best_r = V.vsel(take_pre, r_pre, r)
         best_z = V.vsel(take_pre, z_pre, z)
         take_next = V.vcmp(r_next, best_r, full, 'lt')
@@ -163,6 +159,8 @@ def get_swiglu_forward_kernel_vmi(
                 for i in T.unroll(3, explicit=True):
                     acc[i] = zeros
         if with_certificate:
+            # Loop-carried across tile_id: alloc_var is what lets the eager
+            # builder rebind these accumulators inside the loop.
             certificate_min = V.alloc_var(T.uint32, size=vec_size)
             certificate_max = V.alloc_var(T.uint32, size=vec_size)
             certificate_min = V.vbrc(T.uint32(0xFFFFFFFF), size=vec_size)
@@ -187,11 +185,8 @@ def get_swiglu_forward_kernel_vmi(
                         val_l = V.vload(xl_ub[col], size=vec_size)
                         val_r = V.vload(xr_ub[col], size=vec_size)
                     if has_clamp:
-                        silu_l = V.vmin(val_l, V.vbrc(T.float32(clamp_value), size=vec_size))
-                        mul_r = V.vmax(
-                            V.vmin(val_r, V.vbrc(T.float32(clamp_value), size=vec_size)),
-                            V.vbrc(T.float32(-clamp_value), size=vec_size),
-                        )
+                        silu_l = V.vmins(val_l, T.float32(clamp_value), full)
+                        mul_r = V.vmaxs(V.vmins(val_r, T.float32(clamp_value), full), T.float32(-clamp_value), full)
                     else:
                         silu_l = val_l
                         mul_r = val_r
@@ -250,7 +245,11 @@ def get_swiglu_forward_kernel_vmi(
                 if out_config.round_sf:
                     scales_or_exponents, inverses = get_scale_and_inverse(amax)
                     if out_config.use_packed_ue8m0:
-                        V.vstore(V.vcvt(scales_or_exponents, 'uint8'), sf_dense_ub[token_offset, group])
+                        # ASC reinterprets the shifted exponent bits as uint8
+                        # (truncation). Spell out NOSAT because PTODSL would
+                        # otherwise default to SAT for this narrowing cast,
+                        # which differs for exponents >= 256 (amax = inf).
+                        V.vstore(V.vcvt(scales_or_exponents, 'uint8', saturate='NOSAT'), sf_dense_ub[token_offset, group])
                     else:
                         V.vstore(scales_or_exponents, sf_dense_ub[token_offset, group])
                     V.vstore(inverses, inverse_ub[group])
@@ -270,11 +269,14 @@ def get_swiglu_forward_kernel_vmi(
                     col = (vector_base + vector) * vec_size
                     inverse_indices = V.vadds(group_lane, T.int32(vector * 2), full)
                     expanded_inverse = V.vselr(inverses, inverse_indices)
+                    # ASC's FP8 conversion keeps non-finite values as NaN;
+                    # PTODSL's SAT would clamp them. NOSAT matches ASC for both
+                    # non-finite values and finite results at the 448 boundary.
                     quantized = V.vcvt(
                         V.vmul(V.vload(values_ub[col], size=vec_size), expanded_inverse),
                         'float8_e4m3fn',
                         rounding='R',
-                        saturate='SAT',
+                        saturate='NOSAT',
                     )
                     V.vstore(quantized, out_ub[col])
 
@@ -462,6 +464,8 @@ def get_swiglu_forward_kernel_vmi(
                 with T.SimdVF():
                     full = V.create_mask(vec_size, size=vec_size)
                     for i in T.unroll(3, explicit=True):
+                        # These are exact integer counts (< 2^24), so the
+                        # reassociation allowed by PTODSL cannot change them.
                         reduced = V.vcadd(V.vload(pacc_ub[i, 0], size=vec_size), full, reassoc=True)
                         V.vstore(V.vcvt(reduced, 'int32'), acc_ub[i], group=1, stride=1)
 
