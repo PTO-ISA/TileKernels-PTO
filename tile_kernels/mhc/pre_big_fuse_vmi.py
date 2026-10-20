@@ -137,9 +137,6 @@ def mhc_pre_big_fuse_fwd_vmi(
                 # 64-lane vector spans 2 2/3 tokens, so each lane picks up
                 # the rsqrt scale of the token it belongs to via a lane-range
                 # mask instead of a physical pattern.
-                # (128-lane merge blocked: vci above 64 lanes trips the
-                # ptoas VPTO pipeline; minimal repro at hand, to be
-                # reported upstream.)
                 for vec_idx in T.unroll(tb * mhc3 // 64, explicit=True):
                     m_vec = V.vload(mul_flat_ub[vec_idx * 64], size=64)
                     rms_vec = V.alloc_var(T.float32, size=64)
@@ -222,9 +219,7 @@ def mhc_pre_big_fuse_fwd_vmi(
                     )
 
                 # comb: 4 tokens per VR (16 lanes each); unrolled for the
-                # PTODSL loop-scalar typing reason.  (A 256-lane single
-                # gather/store merge is blocked: the lane-index vci above 64
-                # lanes trips the ptoas VPTO pipeline; same upstream defect.)
+                # same PTODSL loop-scalar typing reason as the pre/post loop.
                 for vec_id in T.unroll(tb // 4, explicit=True):
                     token = V.vadd(V.vshrs(idx, T.int32(4), mask_full), V.vbrc(T.int32(vec_id * 4), size=64))
                     token_offset = V.vadd(V.vshls(token, T.int32(4), mask_full), V.vshls(token, T.int32(3), mask_full))
@@ -355,23 +350,21 @@ def mhc_pre_big_fuse_fwd_vmi(
                     x_ub,
                 )
                 with T.SimdVF():
-                    # One h_blk-wide vector per (token, mhc) row replaces
-                    # ASC's num_chunks loop of 64-lane passes (physical
-                    # 64-fp32 VR limit).  h_blk comes from the host dispatch
-                    # as one of 64/128/256, all legal VMI lane counts.
-                    mix_reg = V.alloc_local((mhc,), V.vreg(h_blk, T.float32))
-                    xs = V.alloc_local((mhc,), V.vreg(h_blk, T.float32))
-                    acc = V.alloc_var(T.float32, size=h_blk)
-                    mask_full = V.create_mask(h_blk, size=h_blk)
+                    mix_reg = V.alloc_local((mhc,), V.vreg(64, T.float32))
+                    xs = V.alloc_local((mhc,), V.vreg(64, T.float32))
+                    acc = V.alloc_var(T.float32, size=64)
+                    mask_full = V.create_mask(64, size=64)
                     for t in T.serial(tb):
                         for m in T.unroll(mhc, explicit=True):
-                            mix_reg[m] = V.vbrc(V.vload(pre_ub[t, m], size=1), size=h_blk)
-                        for m in T.unroll(mhc, explicit=True):
-                            xs[m] = V.vcvt(V.vload(x_ub[t, m, 0], size=h_blk), 'float32')
-                        acc = V.vmul(xs[0], mix_reg[0])
-                        for m in T.unroll(mhc - 1, explicit=True):
-                            acc = V.vmula(acc, xs[m + 1], mix_reg[m + 1], mask_full)
-                        V.vstore(V.vcvt(acc, 'bfloat16'), layer_input_ub[t, 0])
+                            mix_reg[m] = V.vbrc(V.vload(pre_ub[t, m], size=1), size=64)
+                        for c in T.serial(num_chunks):
+                            col = c * _VEC
+                            for m in T.unroll(mhc, explicit=True):
+                                xs[m] = V.vcvt(V.vload(x_ub[t, m, col], size=64), 'float32')
+                            acc = V.vmul(xs[0], mix_reg[0])
+                            for m in T.unroll(mhc - 1, explicit=True):
+                                acc = V.vmula(acc, xs[m + 1], mix_reg[m + 1], mask_full)
+                            V.vstore(V.vcvt(acc, 'bfloat16'), layer_input_ub[t, col])
 
                 T.copy(
                     layer_input_ub,
