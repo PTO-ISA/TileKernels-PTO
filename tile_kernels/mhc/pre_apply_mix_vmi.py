@@ -32,25 +32,19 @@ def mhc_pre_apply_mix_fwd_vmi(x, mix, o, h_blk, num_vec_cores: int):
             T.copy(x[pid_n, 0, pid_h * h_blk], x_ub)
 
             with T.SimdVF():
-                # Full-width 128-lane fp32 vectors: one 128-lane iteration
-                # covers two ASC 64-lane chunks (VMI's legal lane set includes
-                # 128; ASC was capped at 64 by the physical register width).
-                # The per-element operation order is unchanged, so the result
-                # stays bitwise identical to ASC.  Every dispatch config
-                # yields an h_blk that is a multiple of 128 (hidden is a
-                # multiple of 256; h_blk is hidden, hidden/2 or 6144), so no
-                # tail chunk is needed.
+                # All vectors are full-width 64-lane fp32 (h_blk is a multiple
+                # of 64), so only vmula needs an explicit mask.
                 # Preload the mix scalars as broadcast registers once per token-tile.
-                mix_reg = V.alloc_local((mhc,), V.vreg(128, T.float32))
+                mix_reg = V.alloc_local((mhc,), V.vreg(64, T.float32))
                 for m in T.unroll(mhc, explicit=True):
-                    mix_reg[m] = V.vbrc(V.vload(mix_ub[m], size=1), size=128)
-                xs = V.alloc_local((mhc,), V.vreg(128, T.float32))
-                acc = V.alloc_var(T.float32, size=128)
-                mask_full = V.create_mask(128, size=128)
-                for c in T.serial(h_blk // 128):
-                    col = c * 128
+                    mix_reg[m] = V.vbrc(V.vload(mix_ub[m], size=1), size=64)
+                xs = V.alloc_local((mhc,), V.vreg(64, T.float32))
+                acc = V.alloc_var(T.float32, size=64)
+                mask_full = V.create_mask(64, size=64)
+                for c in T.serial(num_chunks):
+                    col = c * _VEC
                     for m in T.unroll(mhc, explicit=True):
-                        xs[m] = V.vcvt(V.vload(x_ub[m, col], size=128), 'float32')
+                        xs[m] = V.vcvt(V.vload(x_ub[m, col], size=64), 'float32')
                     acc = V.vmul(xs[0], mix_reg[0])
                     for m in T.unroll(mhc - 1, explicit=True):
                         acc = V.vmula(acc, xs[m + 1], mix_reg[m + 1], mask_full)
