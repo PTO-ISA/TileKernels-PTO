@@ -137,11 +137,15 @@ def mhc_post_bwd_vmi(d_o, comb_res_mix, residual, post_layer_mix, x, h_blk, num_
             T.copy(post_layer_mix[pid_n, 0], post_layer_mix_ub[0:mhc])
 
             with T.SimdVF():
-                zero = V.vbrc(T.float32(0.0), size=64)
-                for mo in T.unroll(mhc, explicit=True):
-                    V.vstore(zero, post_mix_acc[mo, 0])
-                for idx in T.unroll(mhc * mhc, explicit=True):
-                    V.vstore(zero, comb_mix_acc[idx, 0])
+                # The accumulator rows are contiguous fp32, so clear two rows
+                # (128 lanes) per store.  mhc is the model's residual-stream
+                # count and is even for every declared config (mhc_mult=4);
+                # both row counts (mhc and mhc*mhc) are therefore even.
+                zero = V.vbrc(T.float32(0.0), size=128)
+                for mo in T.unroll(mhc // 2, explicit=True):
+                    V.vstore(zero, post_mix_acc[mo * 2, 0])
+                for idx in T.unroll(mhc * mhc // 2, explicit=True):
+                    V.vstore(zero, comb_mix_acc[idx * 2, 0])
 
             for pid_h in T.serial(num_hidden_tiles):
                 T.copy(d_o[pid_n, 0, pid_h * h_blk], d_o_ub)
