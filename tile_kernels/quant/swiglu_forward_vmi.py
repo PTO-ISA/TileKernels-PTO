@@ -206,7 +206,11 @@ def get_swiglu_forward_kernel_vmi(
                     if out_config.with_sf:
                         V.vstore(out_val, values_ub[col])
                     elif out_config.dtype == T.bfloat16:
-                        V.vstore(V.vcvt(out_val, 'bfloat16'), out_ub[col])
+                        # Explicit NOSAT for the same bug A/B reason as the FP8
+                        # output: ASC RS_ENABLE is a no-op and VMI SAT would
+                        # turn NaN into 0 / clamp inf. PTOAS accepts NOSAT for
+                        # this narrowing (verified in repro_fp8_saturate.py).
+                        V.vstore(V.vcvt(out_val, 'bfloat16', saturate='NOSAT'), out_ub[col])
                     else:
                         V.vstore(out_val, out_ub[col])
 
@@ -248,10 +252,11 @@ def get_swiglu_forward_kernel_vmi(
                 if out_config.round_sf:
                     scales_or_exponents, inverses = get_scale_and_inverse(amax)
                     if out_config.use_packed_ue8m0:
-                        # ASC reinterprets the shifted exponent bits as uint8
-                        # (truncation). Spell out NOSAT because PTODSL would
-                        # otherwise default to SAT for this narrowing cast,
-                        # which differs for exponents >= 256 (amax = inf).
+                        # int-narrow (uint32 -> uint8): NOSAT is exactly ASC's
+                        # reinterpret-truncation, unrelated to the FP8 output
+                        # saturate decision below. Spell it out because PTODSL
+                        # otherwise defaults to SAT for narrowing, which differs
+                        # for exponents >= 256 (amax = inf).
                         V.vstore(V.vcvt(scales_or_exponents, 'uint8', saturate='NOSAT'), sf_dense_ub[token_offset, group])
                     else:
                         V.vstore(scales_or_exponents, sf_dense_ub[token_offset, group])
@@ -272,19 +277,19 @@ def get_swiglu_forward_kernel_vmi(
                     col = (vector_base + vector) * vec_size
                     inverse_indices = V.vadds(group_lane, T.int32(vector * 2), full)
                     expanded_inverse = V.vselr(inverses, inverse_indices)
-                    # Faithful translation of ASC S.vcvt(sat=True). Toolchain
-                    # caveat: on this build ASC's RS_ENABLE behaves like NOSAT
-                    # for narrowing conversions (non-finite -> NaN), while VMI
-                    # SAT really saturates. This is a toolchain inconsistency,
-                    # not a semantic choice; see repro_fp8_saturate.py and the
-                    # upstream issue draft. Do not "fix" it by switching to
-                    # NOSAT. Finite values are unaffected: value <=
-                    # 448*(1+2^-23) << 464, the RNE overflow threshold.
+                    # FP8 output saturate: explicit NOSAT. ASC's RS_ENABLE is a
+                    # no-op for f32->e4m3 here (bug A: sat=True and sat=False
+                    # produce the same bytes), while VMI SAT maps NaN to 0x00
+                    # (bug B). NOSAT is the only mode that both reproduces ASC
+                    # today and preserves NaN; switch back to SAT after bug A is
+                    # fixed upstream. Both bugs: <ISSUE_URL_TBD> (draft ready;
+                    # to be filed), repro_fp8_saturate.py. Finite values are unaffected:
+                    # value <= 448*(1+2^-23) << 464 (e4m3 RNE overflow threshold).
                     quantized = V.vcvt(
                         V.vmul(V.vload(values_ub[col], size=vec_size), expanded_inverse),
                         'float8_e4m3fn',
                         rounding='R',
-                        saturate='SAT',
+                        saturate='NOSAT',
                     )
                     V.vstore(quantized, out_ub[col])
 
@@ -475,7 +480,10 @@ def get_swiglu_forward_kernel_vmi(
                         # These are exact integer counts (< 2^24), so the
                         # reassociation allowed by PTODSL cannot change them.
                         reduced = V.vcadd(V.vload(pacc_ub[i, 0], size=vec_size), full, reassoc=True)
-                        V.vstore(V.vcvt(reduced, 'int32'), acc_ub[i], group=1, stride=1)
+                        # fp->int narrow: the count is < 2^24, so SAT/NOSAT are
+                        # identical. Spell out NOSAT instead of relying on
+                        # PTODSL's implicit SAT default.
+                        V.vstore(V.vcvt(reduced, 'int32', saturate='NOSAT'), acc_ub[i], group=1, stride=1)
 
                 with T.SimtVF(threads=1):
                     for i in T.serial(4):

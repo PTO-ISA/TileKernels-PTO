@@ -5,9 +5,9 @@ Targets the cases that random data does not reach:
   * forward/backward exact divisions with subnormal operands (finite-domain
     check; the subnormal sweep does NOT exercise the 'le'/'lt' tie branch:
     b = 2 there, a/2 is exact, and r = 0)
-  * forward packed UE8M0 with amax = inf and non-finite/overflow outputs
-    (documents the known ASC RS_ENABLE vs VMI SAT toolchain difference)
-  * backward e4m3 non-finite inputs with packed/TMA and packed non-TMA SF
+  * forward e4m3/bf16 non-finite outputs, including amax = inf
+  * backward e4m3 (packed TMA / packed non-TMA) and bf16 non-finite inputs,
+    comparing x_grad, x_grad_fp8, SF and act_out bitwise
 
 Run inside the A5 container after sourcing activate_vmi_migration.sh.
 """
@@ -114,26 +114,25 @@ def forward_nonfinite():
         x[i, :H] = left
         x[i, H:] = right
     kw = dict(fmt='e4m3', num_per_channels=32, use_tma_aligned_col_major_sf=True, round_sf=True, use_packed_ue8m0=True)
-    asc_out, asc_sf = run_f(False, x, **kw)
-    vmi_out, vmi_sf = run_f(True, x, **kw)
-    asc_bytes = asc_out.view(torch.uint8).cpu()
-    vmi_bytes = vmi_out.view(torch.uint8).cpu()
-    # Known toolchain difference: ASC's RS_ENABLE does not saturate f32->e4m3
-    # (non-finite/overflow -> NaN 0x7f), while VMI SAT does. See
-    # repro_fp8_saturate.py and deliverables/ISSUE_fp8_saturate.md.
-    asc_nan = asc_bytes == 0x7F
-    finite_ok = bool(torch.equal(asc_bytes[~asc_nan], vmi_bytes[~asc_nan]))
-    sat_ok = bool((vmi_bytes[asc_nan] != asc_bytes[asc_nan]).all())
-    sf_ok = bool(torch.equal(asc_sf.cpu(), vmi_sf.cpu()))
-    ok = finite_ok and sat_ok and sf_ok
-    print(
-        'fwd_e4m3_nonfinite:',
-        f'OK (finite rows match; known ASC RS_ENABLE difference on {int(asc_nan.sum())} lanes)'
-        if ok
-        else f'MISMATCH finite={finite_ok} sat={sat_ok} sf={sf_ok}',
-        flush=True,
-    )
-    return ok
+    return check('fwd_e4m3_nonfinite', run_f(False, x, **kw), run_f(True, x, **kw))
+
+
+def forward_nonfinite_bf16():
+    tile_kernels.set_token_alignment(128)
+    x = torch.randn((T, 2 * H), dtype=torch.bfloat16, device='npu')
+    rows = [
+        (float('inf'), 1.0),
+        (float('-inf'), 1.0),
+        (float('nan'), 1.0),
+        (-0.0, 1.0),
+        (-1e-40, 1.0),  # bf16 subnormal
+        (3e38, 1.0),  # bf16 finite max vicinity
+        (2.0, 3.0),  # finite control
+    ]
+    for i, (left, right) in enumerate(rows):
+        x[i, :H] = left
+        x[i, H:] = right
+    return check('fwd_bf16_nonfinite', run_f(False, x, fmt='bf16'), run_f(True, x, fmt='bf16'))
 
 
 def forward_sf_only():
@@ -180,31 +179,38 @@ def backward_nonfinite(tma):
     g[2, :] = float('nan')
     g[3, :] = -0.0
     g[4, :] = -1e-40
-    kw = dict(fmt='e4m3', num_per_channels=32, use_tma_aligned_col_major_sf=tma, round_sf=True, use_packed_ue8m0=True)
-    a = run_b(False, (x_data, x_sf), g, **kw)
-    b = run_b(True, (x_data, x_sf), g, **kw)
-    a_fp8, a_sf = a[1]
-    b_fp8, b_sf = b[1]
-    asc_bytes = a_fp8.view(torch.uint8).cpu()
-    vmi_bytes = b_fp8.view(torch.uint8).cpu()
-    # Same known ASC RS_ENABLE vs VMI SAT difference as the forward path.
-    asc_nan = asc_bytes == 0x7F
-    finite_ok = bool(torch.equal(asc_bytes[~asc_nan], vmi_bytes[~asc_nan]))
-    sat_ok = bool((vmi_bytes[asc_nan] != asc_bytes[asc_nan]).all())
-    sf_ok = bits_equal(a_sf, b_sf)
-    # x_grad is bf16. The same ASC RS_ENABLE quirk also affects f32->bf16
-    # narrowing (inf/NaN), so report it without making it a pass criterion.
-    xgrad_ok = bits_equal(a[0], b[0])
-    ok = finite_ok and sat_ok and sf_ok
-    tag = 'tma' if tma else 'packed'
-    print(
-        f'bwd_e4m3_nonfinite_{tag}:',
-        f'OK (finite x_grad_fp8/SF match; known ASC RS_ENABLE difference on {int(asc_nan.sum())} lanes; x_grad bitwise={xgrad_ok})'
-        if ok
-        else f'MISMATCH finite={finite_ok} sat={sat_ok} sf={sf_ok} xgrad={xgrad_ok}',
-        flush=True,
+    kw = dict(
+        fmt='e4m3',
+        num_per_channels=32,
+        use_tma_aligned_col_major_sf=tma,
+        round_sf=True,
+        use_packed_ue8m0=True,
+        do_recompute=True,
     )
-    return ok
+    tag = 'tma' if tma else 'packed'
+    return check(f'bwd_e4m3_nonfinite_{tag}', run_b(False, (x_data, x_sf), g, **kw), run_b(True, (x_data, x_sf), g, **kw))
+
+
+def backward_nonfinite_bf16():
+    tile_kernels.set_token_alignment(128)
+    torch.manual_seed(20261022)
+    x = torch.randn((T, 2 * H), dtype=torch.bfloat16, device='npu')
+    x[0, :H] = float('inf')
+    x[1, :H] = float('-inf')
+    x[2, :H] = float('nan')
+    x[3, :H] = -0.0
+    x[4, :H] = -1e-40  # bf16 subnormal
+    x[5, :H] = 3e38
+    for row in range(6):
+        x[row, H:] = 1.0
+    g = torch.randn((T, H), dtype=torch.bfloat16, device='npu')
+    g[0, :] = float('inf')
+    g[1, :] = float('-inf')
+    g[2, :] = float('nan')
+    g[3, :] = -0.0
+    g[4, :] = -1e-40
+    g[5, :] = 3e38
+    return check('bwd_bf16_nonfinite', run_b(False, x, g, fmt='bf16', do_recompute=True), run_b(True, x, g, fmt='bf16', do_recompute=True))
 
 
 if __name__ == '__main__':
@@ -212,10 +218,12 @@ if __name__ == '__main__':
         forward_subnormal(torch.float32, 'fp32'),
         forward_subnormal(torch.bfloat16, 'bf16'),
         forward_nonfinite(),
+        forward_nonfinite_bf16(),
         forward_sf_only(),
         backward_subnormal(torch.float32, 'fp32'),
         backward_subnormal(torch.bfloat16, 'bf16'),
         backward_nonfinite(True),
         backward_nonfinite(False),
+        backward_nonfinite_bf16(),
     ]
     print('ALL_OK' if all(results) else 'HAS_MISMATCH')

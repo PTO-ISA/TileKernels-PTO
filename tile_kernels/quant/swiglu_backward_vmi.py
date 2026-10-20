@@ -403,8 +403,11 @@ def get_swiglu_backward_kernel_vmi(
                                 y_grad_value = V.vsel(is_clamped_y, zeros, y_grad_unclamped) if use_clamp else y_grad_unclamped
                                 if not with_quant:
                                     if out_dtype == T.bfloat16:
-                                        V.vstore(V.vcvt(x_grad_value, 'bfloat16'), x_grad_ub[col])
-                                        V.vstore(V.vcvt(y_grad_value, 'bfloat16'), y_grad_ub[col])
+                                        # Explicit NOSAT: same bug A/B rationale as
+                                        # the FP8 output; do not rely on PTODSL's
+                                        # implicit SAT default for narrowing.
+                                        V.vstore(V.vcvt(x_grad_value, 'bfloat16', saturate='NOSAT'), x_grad_ub[col])
+                                        V.vstore(V.vcvt(y_grad_value, 'bfloat16', saturate='NOSAT'), y_grad_ub[col])
                                     else:
                                         V.vstore(x_grad_value, x_grad_ub[col])
                                         V.vstore(y_grad_value, y_grad_ub[col])
@@ -418,7 +421,8 @@ def get_swiglu_backward_kernel_vmi(
                                 if do_recompute:
                                     act_out_value = V.vmuls(act_value, effective_weight, full)
                                     if out_dtype == T.bfloat16:
-                                        V.vstore(V.vcvt(act_out_value, 'bfloat16'), act_out_ub[col])
+                                        # Explicit NOSAT, same bug A/B rationale.
+                                        V.vstore(V.vcvt(act_out_value, 'bfloat16', saturate='NOSAT'), act_out_ub[col])
                                     else:
                                         V.vstore(act_out_value, act_out_ub[col])
 
@@ -456,11 +460,13 @@ def get_swiglu_backward_kernel_vmi(
                                     if out_config.use_packed_ue8m0:
                                         x_exp = V.vshrs(V.vinterpret_cast(x_scale_out, 'uint32'), T.uint32(23), full)
                                         y_exp = V.vshrs(V.vinterpret_cast(y_scale_out, 'uint32'), T.uint32(23), full)
-                                        # ASC reinterprets the shifted exponent bits
-                                        # as uint8 (truncation). Spell out NOSAT
-                                        # because PTODSL otherwise defaults to SAT for
-                                        # this narrowing cast, which differs for
-                                        # exponents >= 256 (amax = inf).
+                                        # int-narrow (uint32 -> uint8): NOSAT is
+                                        # exactly ASC's reinterpret-truncation;
+                                        # unrelated to the FP8 output saturate
+                                        # decision below. Spell it out because PTODSL
+                                        # otherwise defaults to SAT for narrowing,
+                                        # which differs for exponents >= 256
+                                        # (amax = inf).
                                         V.vstore(
                                             V.vcvt(x_exp, 'uint8', saturate='NOSAT'),
                                             sf_dense_u8[row, sf_block_offset * 2 + scale_offset],
@@ -484,21 +490,22 @@ def get_swiglu_backward_kernel_vmi(
                                     y_grad_quant_value = V.vload(y_grad_f32_ub[col], size=vec_size)
                                     x_scaled_value = V.vmul(x_grad_quant_value, x_inv_vec, full)
                                     y_scaled_value = V.vmul(y_grad_quant_value, y_inv_vec, full)
-                                    V.vstore(V.vcvt(x_grad_quant_value, 'bfloat16'), x_grad_ub[col])
-                                    V.vstore(V.vcvt(y_grad_quant_value, 'bfloat16'), y_grad_ub[col])
+                                    # Explicit NOSAT, same bug A/B rationale.
+                                    V.vstore(V.vcvt(x_grad_quant_value, 'bfloat16', saturate='NOSAT'), x_grad_ub[col])
+                                    V.vstore(V.vcvt(y_grad_quant_value, 'bfloat16', saturate='NOSAT'), y_grad_ub[col])
                                     x_scaled = V.vsel(valid_token_mask, x_scaled_value, zeros) if num_experts else x_scaled_value
                                     y_scaled = V.vsel(valid_token_mask, y_scaled_value, zeros) if num_experts else y_scaled_value
-                                    # Faithful translation of ASC S.vcvt(sat=True).
-                                    # Toolchain caveat: on this build ASC's RS_ENABLE
-                                    # behaves like NOSAT for narrowing conversions
-                                    # (non-finite -> NaN), while VMI SAT really
-                                    # saturates. This is a toolchain inconsistency,
-                                    # not a semantic choice; see repro_fp8_saturate.py
-                                    # and the upstream issue draft. Do not "fix" it by
-                                    # switching to NOSAT. Finite values are unaffected:
-                                    # value <= 448*(1+2^-23) << 464, the RNE threshold.
-                                    V.vstore(V.vcvt(x_scaled, 'float8_e4m3fn', rounding='R', saturate='SAT'), x_grad_fp8_ub[col])
-                                    V.vstore(V.vcvt(y_scaled, 'float8_e4m3fn', rounding='R', saturate='SAT'), y_grad_fp8_ub[col])
+                                    # FP8 output saturate: explicit NOSAT. ASC's
+                                    # RS_ENABLE is a no-op for f32->e4m3 here (bug A),
+                                    # while VMI SAT maps NaN to 0x00 (bug B). NOSAT is
+                                    # the only mode that both reproduces ASC today and
+                                    # preserves NaN; switch back to SAT after bug A is
+                                    # fixed upstream. Both bugs: <ISSUE_URL_TBD>
+                                    # (draft ready; to be filed), repro_fp8_saturate.py.
+                                    # Finite values are
+                                    # unaffected: value <= 448*(1+2^-23) << 464.
+                                    V.vstore(V.vcvt(x_scaled, 'float8_e4m3fn', rounding='R', saturate='NOSAT'), x_grad_fp8_ub[col])
+                                    V.vstore(V.vcvt(y_scaled, 'float8_e4m3fn', rounding='R', saturate='NOSAT'), y_grad_fp8_ub[col])
 
                         T.copy(x_grad_ub, x_grad[token_id, col_offset : col_offset + block_k])
                         T.copy(y_grad_ub, x_grad[token_id, hidden + col_offset : hidden + col_offset + block_k])

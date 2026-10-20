@@ -2,6 +2,8 @@
 """Minimal f32 -> e4m3 / bf16 saturation repro for ASC S.vcvt vs VMI V.vcvt.
 
 Only one conversion is performed per kernel; no SwiGLU scale or mask is involved.
+Upstream issue: <ISSUE_URL_TBD> (bug A: ASC RS_ENABLE is a no-op;
+bug B: VMI SAT maps NaN to 0x00).
 Run inside the A5 container after sourcing activate_vmi_migration.sh.
 """
 
@@ -22,6 +24,10 @@ VALUES = [
     464.0,
     480.0,
     1e30,
+    3.4e38,
+    -3.4e38,
+    1e-40,
+    -1e-40,
 ]
 VARIANTS = [
     ('asc_sat', False, True),
