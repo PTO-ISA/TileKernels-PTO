@@ -4,6 +4,7 @@ from tile_kernels.config import is_ascend
 
 if is_ascend():
     from tilelang.ascend.language import simd as S
+    from tilelang.ascend.language import vmi as V
 
 
 _G0 = 0.8325546383857727
@@ -100,6 +101,33 @@ def sqrt_softplus_forward_asc(logit):
     return _assemble_softsqrt(logit, l)
 
 
+# VMI spelling of the same approximation.  The lane width and mask are
+# explicit because VMI carries logical vectors rather than ASC's physical
+# 256-byte layout.
+@T.macro
+def sqrt_softplus_forward_vmi(logit, mask, size):
+    one = V.vbrc(T.float32(1.0), size=size)
+    half = V.vbrc(T.float32(0.5), size=size)
+    neg_half_abs = V.vmuls(V.vabs(logit), T.float32(-0.5), mask)
+    a = V.vexp(neg_half_abs, mask)
+    t = V.vsub(one, V.vmul(a, a, mask), mask)
+    poly = V.vbrc(T.float32(_FORWARD_COEFFS[0]), size=size)
+    for coeff in _FORWARD_COEFFS[1:]:
+        poly = V.vmula(V.vbrc(T.float32(coeff), size=size), poly, t, mask)
+    g = V.vmula(V.vbrc(T.float32(_G0), size=size), t, poly, mask)
+    l = V.vmul(a, g, mask)
+    x_pos = V.vrelu(logit, mask)
+    s = V.vmula(x_pos, l, l, mask)
+    root0 = V.vsqrt(s, mask)
+    recip0 = V.vdiv(one, root0, mask, precision='ftz_true')
+    root1 = V.vmul(V.vadd(root0, V.vmul(s, recip0, mask), mask), half, mask)
+    resid = V.vmula(V.vneg(s, mask), root1, root1, mask)
+    corr = V.vmuls(recip0, T.float32(-0.5), mask)
+    root2 = V.vmula(root1, resid, corr, mask)
+    positive = V.vcmp(logit, V.vbrc(T.float32(0.0), size=size), mask, 'gt')
+    return V.vsel(positive, root2, l)
+
+
 # Q(u) coefficients in descending degree (Horner order), shared by both backends.
 # For u=y*y<1, dy/dx = (y/2) * (1 + u*Q(u)).
 _BACKWARD_COEFFS = (
@@ -142,3 +170,19 @@ def sqrt_softplus_backward_asc(y):
     numerator = S.vsub(S.vdup(1.0, T.float32), S.vexp(S.vneg(u), precision='ftz_true'))
     large = S.vmuls(S.vdiv(numerator, y, precision='ftz_true'), 0.5)
     return S.vsel(small, large, S.vcmps(u, 1.0, op='lt'))
+
+
+@T.macro
+def sqrt_softplus_backward_vmi(y, mask, size):
+    one = V.vbrc(T.float32(1.0), size=size)
+    half = V.vbrc(T.float32(0.5), size=size)
+    u = V.vmul(y, y, mask)
+    q = V.vbrc(T.float32(_BACKWARD_COEFFS[0]), size=size)
+    for coeff in _BACKWARD_COEFFS[1:]:
+        q = V.vmula(V.vbrc(T.float32(coeff), size=size), q, u, mask)
+    half_y = V.vmul(y, half, mask)
+    small = V.vmula(half_y, V.vmul(u, q, mask), half_y, mask)
+    numerator = V.vsub(one, V.vexp(V.vneg(u, mask), mask), mask)
+    large = V.vmul(V.vdiv(numerator, y, mask, precision='ftz_true'), half, mask)
+    is_small = V.vcmp(u, one, mask, 'lt')
+    return V.vsel(is_small, small, large)
