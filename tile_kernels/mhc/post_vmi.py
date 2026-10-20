@@ -1,31 +1,3 @@
-"""VMI port of the mhc post kernels (discussion #1616).
-
-Each kernel is the ASC original with only the ``T.SimdVF()`` bodies rewritten
-in logical VMI vectors; the outer schedule (T.Kernel / T.Persistent / T.copy /
-UB layout / num_stages) and the host contract are kept verbatim from
-``post_asc.py`` so ASC and VMI stay directly comparable.
-
-Key ASC -> VMI correspondences used here:
-
-- ``S.vld(x_ub[col], dist='UNPK_B16')`` + ``S.vcvt(.., T.float32, part=0)``
-  becomes ``V.vcvt(V.vload(x_ub[col], size=64), 'float32')``: the load yields
-  the logical 64-lane bf16 vector and the physical unpack/packing layout is
-  left to ptoas.
-- ``S.vsts(.., S.vcvt(v, T.bfloat16), dist='PK_B32')`` becomes
-  ``V.vstore(V.vcvt(v, 'bfloat16'), ..)`` for the same reason.
-- ``S.vld(scalar_ub[i, j], dist='BRC_B32')`` becomes
-  ``V.vbrc(V.vload(scalar_ub[i, j], size=1), size=64)``: PTOAS removed the
-  vload broadcast dist_mode, so a scalar broadcast is a one-element vload
-  followed by vbrc (per the ptoas commit "remove load/store dist_mode").
-- ``S.vmula(dst, a, b)`` (in-place accumulate) becomes
-  ``dst = V.vmula(dst, a, b, mask_full)`` (value form; vmula requires an
-  explicit mask).
-- ``S.vsts(dst, S.vcadd(v), dist='ONEPT_B32')`` becomes ``V.vstore`` of the
-  1-lane ``V.vcadd`` result itself (an unmasked one-lane scalar store;
-  ptoas rejects a broadcast-plus-lane-0-mask store at unaligned scalar
-  slots).
-"""
-
 import tilelang
 from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
