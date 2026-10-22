@@ -43,7 +43,27 @@ def get_swiglu_forward_kernel_vmi(
     num_stages = 3
     # Multiplication by a weight requires a larger certificate error bound.
     certificate_error = 5 if with_weight else 2
+    # The amax path uses the widest logical vector whose outer tile (4 vectors) is
+    # always full. A partially-valid tile puts the amax accumulator behind a
+    # dynamic `vector_id < num_vecs` branch, and ptoas then sees two VMI layouts
+    # for the same 256/128-lane value on the scf.if result (contiguous vs
+    # deinterleaved). Non-quantized outputs keep the original 64-lane form, and
+    # clamp counting stays at 64 lanes too: its per-lane counters plus the
+    # certificate spill the register file at 256/128 lanes (measured 2.3x slower).
     vec_size = 64
+    if out_config.with_sf and not count_clamp:
+        for candidate in (256, 128):
+            if hidden % candidate == 0 and (hidden // candidate) % 4 == 0:
+                vec_size = candidate
+                break
+    groups_per_vector = vec_size // 32
+    # A full reduction over one physical part (64 lanes) is the largest form
+    # ptoas lowers. Wider vectors use a grouped reduction plus a scalar combine.
+    cert_groups = vec_size // 64
+    # Scale conversion and the 64-value amax rows stay one vector wide.
+    scale_batch = 64
+    # 64 amax values (one per 32 channels) cover 2048 channels per batch.
+    vectors_per_batch = scale_batch * 32 // vec_size
     num_vecs = hidden // vec_size
     hidden_aligned = align(hidden, 256)
 
@@ -72,7 +92,7 @@ def get_swiglu_forward_kernel_vmi(
         review_adversarial_ab.py does not claim to cover that branch.
         """
         full = V.create_mask(vec_size, size=vec_size)
-        z = V.vdiv(a, b, full)
+        z = V.vdiv(a, b)
         y = V.vneg(b)
         r = V.vmula(a, z, y, full)
         z_bits = V.vinterpret_cast(z, 'int32')
@@ -93,16 +113,16 @@ def get_swiglu_forward_kernel_vmi(
 
     @T.macro
     def get_scale_and_inverse(amax):
-        full = V.create_mask(vec_size, size=vec_size)
+        full = V.create_mask(scale_batch, size=scale_batch)
         clamped_amax = V.vmaxs(amax, T.float32(out_config.clamp_min_value), full)
         scale_bits = V.vinterpret_cast(V.vmuls(clamped_amax, T.float32(1.0 / 448.0), full), 'uint32')
         exponent = V.vadds(
-            V.vshrs(V.vsub(scale_bits, V.vbrc(T.uint32(1), size=vec_size), full), T.uint32(23), full),
+            V.vshrs(V.vsub(scale_bits, V.vbrc(T.uint32(1), size=scale_batch)), T.uint32(23), full),
             T.uint32(1),
             full,
         )
         inverse = V.vinterpret_cast(
-            V.vshls(V.vsub(V.vbrc(T.uint32(254), size=vec_size), exponent, full), T.uint32(23), full),
+            V.vshls(V.vsub(V.vbrc(T.uint32(254), size=scale_batch), exponent), T.uint32(23), full),
             'float32',
         )
         if out_config.use_packed_ue8m0:
@@ -171,7 +191,9 @@ def get_swiglu_forward_kernel_vmi(
         else:
             certificate_min = None
             certificate_max = None
-        if out_config.with_sf:
+        if out_config.with_sf and vec_size != 64:
+            # Batched reduction wins on the wide forms; the 64-lane form is
+            # cheaper to reduce in place and avoids four pinned registers.
             amax_acc = V.alloc_local((4,), V.vreg(vec_size, T.float32))
             for i in T.unroll(4, explicit=True):
                 amax_acc[i] = zeros
@@ -195,12 +217,12 @@ def get_swiglu_forward_kernel_vmi(
                         mul_r = val_r
                     denominator = V.vadds(V.vexpdif(zeros, silu_l, full), T.float32(1.0), full)
                     if precision == 'ftz_true':
-                        quotient = V.vdiv(silu_l, denominator, full)
+                        quotient = V.vdiv(silu_l, denominator)
                     elif precision == 'exact':
                         quotient = vdiv_exact_0ulp(silu_l, denominator)
                     else:
                         raise ValueError(f"unsupported vdiv precision {precision!r}; expected 'ftz_true' or 'exact'")
-                    val = V.vmul(quotient, mul_r, full)
+                    val = V.vmul(quotient, mul_r)
                     out_val = V.vmuls(val, weight, full) if with_weight else val
 
                     if out_config.with_sf:
@@ -226,19 +248,24 @@ def get_swiglu_forward_kernel_vmi(
                         # Merge-mode accumulation: add 1 on active lanes, keep the
                         # previous value elsewhere (PTO vadds only supports zeroing).
                         one = V.vbrc(T.float32(1.0), size=vec_size)
-                        acc[0] = V.vadd(acc[0], V.vsel(clamped_mask_0, one, zeros), full)
-                        acc[1] = V.vadd(acc[1], V.vsel(clamped_mask_1, one, zeros), full)
-                        acc[2] = V.vadd(acc[2], V.vsel(clamped_mask_2, one, zeros), full)
+                        acc[0] = V.vadd(acc[0], V.vsel(clamped_mask_0, one, zeros))
+                        acc[1] = V.vadd(acc[1], V.vsel(clamped_mask_1, one, zeros))
+                        acc[2] = V.vadd(acc[2], V.vsel(clamped_mask_2, one, zeros))
                     if out_config.with_sf:
-                        amax_acc[sub] = V.vabs(out_val)
-            if out_config.with_sf:
-                # 256-element tile amax: two 32-channel groups per 64-lane vector.
+                        if vec_size == 64:
+                            amax = V.vcmax(V.vabs(out_val), full, group=groups_per_vector)
+                            V.vstore(amax, amax_ub[tile_id * 4 * groups_per_vector + sub * groups_per_vector])
+                        else:
+                            amax_acc[sub] = V.vabs(out_val)
+            if out_config.with_sf and vec_size != 64:
+                # One 32-channel scale group per 32 lanes: a 256-lane vector
+                # yields eight groups in one vcmax, a 128-lane vector four.
                 for sub in T.unroll(4, explicit=True):
-                    amax = V.vcmax(amax_acc[sub], full, group=2)
-                    V.vstore(amax, amax_ub[tile_id * 8 + sub * 2])
+                    amax = V.vcmax(amax_acc[sub], full, group=groups_per_vector)
+                    V.vstore(amax, amax_ub[tile_id * 4 * groups_per_vector + sub * groups_per_vector])
         if count_clamp:
             for i in T.unroll(3, explicit=True):
-                V.vstore(V.vadd(V.vload(pacc_buf[i, 0], size=vec_size), acc[i], full), pacc_buf[i, 0])
+                V.vstore(V.vadd(V.vload(pacc_buf[i, 0], size=vec_size), acc[i]), pacc_buf[i, 0])
         return certificate_min, certificate_max
 
     @T.macro
@@ -246,9 +273,10 @@ def get_swiglu_forward_kernel_vmi(
         # Get inverse scale and quantize FP32 SwiGLU result to FP8.
         with T.SimdVF():
             full = V.create_mask(vec_size, size=vec_size)
-            for group_batch in T.serial(T.ceildiv(num_groups, 64)):
-                group = group_batch * 64
-                amax = V.vload(amax_ub[group], size=vec_size)
+            full_scale = V.create_mask(scale_batch, size=scale_batch)
+            for group_batch in T.serial(T.ceildiv(num_groups, scale_batch)):
+                group = group_batch * scale_batch
+                amax = V.vload(amax_ub[group], size=scale_batch)
                 if out_config.round_sf:
                     scales_or_exponents, inverses = get_scale_and_inverse(amax)
                     if out_config.use_packed_ue8m0:
@@ -262,21 +290,25 @@ def get_swiglu_forward_kernel_vmi(
                         V.vstore(scales_or_exponents, sf_dense_ub[token_offset, group])
                     V.vstore(inverses, inverse_ub[group])
                 else:
-                    clamped_amax = V.vmaxs(amax, T.float32(out_config.clamp_min_value), full)
-                    quant_max = V.vbrc(T.float32(448.0), size=vec_size)
-                    V.vstore(V.vdiv(clamped_amax, quant_max, full, precision='exact'), sf_dense_ub[token_offset, group])
-                    V.vstore(V.vdiv(quant_max, clamped_amax, full, precision='exact'), inverse_ub[group])
+                    clamped_amax = V.vmaxs(amax, T.float32(out_config.clamp_min_value), full_scale)
+                    quant_max = V.vbrc(T.float32(448.0), size=scale_batch)
+                    V.vstore(V.vdiv(clamped_amax, quant_max, full_scale, precision='exact'), sf_dense_ub[token_offset, group])
+                    V.vstore(V.vdiv(quant_max, clamped_amax, full_scale, precision='exact'), inverse_ub[group])
 
             S.mem_bar('VST_VLD')
-            group_lane = V.vshrs(V.vci(T.int32(0), size=vec_size), T.int32(5), full)
-            for group_batch in T.unroll(T.ceildiv(num_groups, 64), explicit=True):
-                group_base = group_batch * 64
-                vector_base = group_batch * 32
-                inverses = V.vload(inverse_ub[group_base], size=vec_size)
-                for vector in T.serial(T.min(32, num_vecs - vector_base)):
+            for group_batch in T.unroll(T.ceildiv(num_groups, scale_batch), explicit=True):
+                group_base = group_batch * scale_batch
+                vector_base = group_batch * vectors_per_batch
+                for vector in T.serial(T.min(vectors_per_batch, num_vecs - vector_base)):
                     col = (vector_base + vector) * vec_size
-                    inverse_indices = V.vadds(group_lane, T.int32(vector * 2), full)
-                    expanded_inverse = V.vselr(inverses, inverse_indices)
+                    # Broadcast each 32-channel inverse to its 32 lanes.
+                    inverse_slots = V.vload(
+                        inverse_ub[group_base + vector * groups_per_vector],
+                        size=groups_per_vector,
+                        group=groups_per_vector,
+                        stride=1,
+                    )
+                    expanded_inverse = V.vbrc(inverse_slots, size=vec_size, group=groups_per_vector)
                     # FP8 output saturate: explicit NOSAT. ASC's RS_ENABLE is a
                     # no-op for f32->e4m3 here (bug A: sat=True and sat=False
                     # produce the same bytes), while VMI SAT maps NaN to 0x00
@@ -344,6 +376,8 @@ def get_swiglu_forward_kernel_vmi(
             if count_clamp:
                 acc_ub = T.alloc_shared((4,), T.int32)
                 pacc_ub = T.alloc_shared((3, vec_size), T.float32)  # per lane accumulator pacc_ub. use vcadd at the last moment
+                if cert_groups > 1:
+                    pacc_partial_ub = T.alloc_shared((3, cert_groups), T.int32)
 
                 for i in T.serial(4):
                     acc_ub[i] = 0
@@ -377,7 +411,8 @@ def get_swiglu_forward_kernel_vmi(
             if out_config.with_sf:
                 amax_ub = T.alloc_shared((align(num_groups, 64),), T.float32)
                 if use_fast_certificate:
-                    certificate_ub = T.alloc_shared((token_group, 2), T.uint32)
+                    # cert_groups partial minima followed by cert_groups partial maxima.
+                    certificate_ub = T.alloc_shared((token_group, 2 * cert_groups), T.uint32)
                 inverse_ub = T.alloc_shared((align(num_groups, 64),), T.float32)
                 sf_dense_ub = T.alloc_shared(
                     (token_group, align(num_groups, 64)),
@@ -433,8 +468,25 @@ def get_swiglu_forward_kernel_vmi(
                                     xl_ub, xr_ub, values_ub, out_ub, weight, vdiv_precision, amax_ub, use_fast_certificate, pacc_ub, count_clamp
                                 )
                                 if use_fast_certificate:
-                                    V.vstore(V.vcmin(cert_min, full), certificate_ub[token_offset, 0], group=1, stride=1)
-                                    V.vstore(V.vcmax(cert_max, full), certificate_ub[token_offset, 1], group=1, stride=1)
+                                    if cert_groups == 1:
+                                        V.vstore(V.vcmin(cert_min, full), certificate_ub[token_offset, 0], group=1, stride=1)
+                                        V.vstore(V.vcmax(cert_max, full), certificate_ub[token_offset, 1], group=1, stride=1)
+                                    else:
+                                        # A 256-lane full reduction is not lowered by
+                                        # ptoas; keep one partial per physical part and
+                                        # combine the scalars when checking the token.
+                                        V.vstore(
+                                            V.vcmin(cert_min, full, group=cert_groups),
+                                            certificate_ub[token_offset, 0],
+                                            group=cert_groups,
+                                            stride=1,
+                                        )
+                                        V.vstore(
+                                            V.vcmax(cert_max, full, group=cert_groups),
+                                            certificate_ub[token_offset, cert_groups],
+                                            group=cert_groups,
+                                            stride=1,
+                                        )
                             finish_token(
                                 values_ub, out_ub, amax_ub, inverse_ub, sf_dense_ub, out, out_sf, token_offset, token_id, acc_ub, count_clamp
                             )
@@ -443,13 +495,28 @@ def get_swiglu_forward_kernel_vmi(
                         for fallback_offset in T.serial(token_group):
                             token_id = T.alloc_var(T.int32, init=token_base + fallback_offset)
                             valid = is_valid_token(token_id, expert_id if has_psum else 0, psum_ub if has_psum else None)
-                            unsafe = T.alloc_var(
-                                T.bool,
-                                init=(
+                            if cert_groups == 1:
+                                unsafe_init = (
                                     certificate_ub[fallback_offset, 0] <= certificate_error
                                     or certificate_ub[fallback_offset, 1] >= 0x80000 - certificate_error
-                                ),
-                            )
+                                )
+                            elif cert_groups == 2:
+                                cert_min_all = T.min(certificate_ub[fallback_offset, 0], certificate_ub[fallback_offset, 1])
+                                cert_max_all = T.max(certificate_ub[fallback_offset, 2], certificate_ub[fallback_offset, 3])
+                                unsafe_init = cert_min_all <= certificate_error or cert_max_all >= 0x80000 - certificate_error
+                            else:
+                                # cert_groups == 4: four partial minima, then four
+                                # partial maxima, stored by the main path.
+                                cert_min_all = T.min(
+                                    T.min(certificate_ub[fallback_offset, 0], certificate_ub[fallback_offset, 1]),
+                                    T.min(certificate_ub[fallback_offset, 2], certificate_ub[fallback_offset, 3]),
+                                )
+                                cert_max_all = T.max(
+                                    T.max(certificate_ub[fallback_offset, 4], certificate_ub[fallback_offset, 5]),
+                                    T.max(certificate_ub[fallback_offset, 6], certificate_ub[fallback_offset, 7]),
+                                )
+                                unsafe_init = cert_min_all <= certificate_error or cert_max_all >= 0x80000 - certificate_error
+                            unsafe = T.alloc_var(T.bool, init=unsafe_init)
                             if valid and unsafe:
                                 weight = load_inputs(x, xl_fb_ub, xr_fb_ub, topk_weights, routed_scaling_factor, token_id)
                                 with T.SimdVF():
@@ -464,6 +531,9 @@ def get_swiglu_forward_kernel_vmi(
                         transpose_packed_scales(sf_dense_ub, sf_ub, transpose_indices_ub)
                         # PTO's DMA requires matching source/destination element widths.
                         # Copy through uint8 views instead of the ASC uint16 view.
+                        # tilelang PR #14 (codex/unify-asc-mte-pointer-lowering) removes
+                        # this restriction, but it targets a newer pto-dev and does not
+                        # apply to our pinned 5f105e99 snapshot; keep the byte views.
                         output_sf = T.Tensor((sf_shape[0], sf_shape[1]), T.uint8, out_sf.data)
                         sf_ub_u8 = T.Tensor((num_groups // pack_factor, token_group * 2), T.uint8, sf_ub.data)
                         valid_token_end = psum_ub[expert_id] if has_psum else num_expanded_tokens
@@ -479,13 +549,30 @@ def get_swiglu_forward_kernel_vmi(
                     for i in T.unroll(3, explicit=True):
                         # These are exact integer counts (< 2^24), so the
                         # reassociation allowed by PTODSL cannot change them.
-                        reduced = V.vcadd(V.vload(pacc_ub[i, 0], size=vec_size), full, reassoc=True)
-                        # fp->int narrow: the count is < 2^24, so SAT/NOSAT are
-                        # identical. Spell out NOSAT instead of relying on
-                        # PTODSL's implicit SAT default.
-                        V.vstore(V.vcvt(reduced, 'int32', saturate='NOSAT'), acc_ub[i], group=1, stride=1)
+                        if cert_groups == 1:
+                            reduced = V.vcadd(V.vload(pacc_ub[i, 0], size=vec_size), full, reassoc=True)
+                            # fp->int narrow: the count is < 2^24, so SAT/NOSAT are
+                            # identical. Spell out NOSAT instead of relying on
+                            # PTODSL's implicit SAT default.
+                            V.vstore(V.vcvt(reduced, 'int32', saturate='NOSAT'), acc_ub[i], group=1, stride=1)
+                        else:
+                            # ptoas does not lower a full 256-lane reduction; keep
+                            # one partial per physical part and sum them scalar-side.
+                            reduced = V.vcadd(V.vload(pacc_ub[i, 0], size=vec_size), full, group=cert_groups, reassoc=True)
+                            V.vstore(
+                                V.vcvt(reduced, 'int32', saturate='NOSAT'),
+                                pacc_partial_ub[i, 0],
+                                group=cert_groups,
+                                stride=1,
+                            )
 
                 with T.SimtVF(threads=1):
+                    if cert_groups == 2:
+                        for i in T.serial(3):
+                            acc_ub[i] = pacc_partial_ub[i, 0] + pacc_partial_ub[i, 1]
+                    elif cert_groups == 4:
+                        for i in T.serial(3):
+                            acc_ub[i] = pacc_partial_ub[i, 0] + pacc_partial_ub[i, 1] + pacc_partial_ub[i, 2] + pacc_partial_ub[i, 3]
                     for i in T.serial(4):
                         T.atomic_add(clamped_count[i], T.int64(acc_ub[i]))
 

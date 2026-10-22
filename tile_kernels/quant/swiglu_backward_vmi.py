@@ -83,7 +83,7 @@ def get_swiglu_backward_kernel_vmi(
         not change residual ordering in this operand domain.
         """
         full = V.create_mask(vec_size, size=vec_size)
-        z = V.vdiv(a, b, full)
+        z = V.vdiv(a, b)
         y = V.vneg(b)
         r = V.vmula(a, z, y, full)
         z_bits = V.vinterpret_cast(z, 'int32')
@@ -116,7 +116,7 @@ def get_swiglu_backward_kernel_vmi(
         full = V.create_mask(vec_size, size=vec_size)
         one_i32 = V.vbrc(T.int32(1), size=vec_size)
         zero_i32 = V.vbrc(T.int32(0), size=vec_size)
-        z = V.vdiv(a, b, full)
+        z = V.vdiv(a, b)
         neg_b = V.vneg(b)
 
         residual = V.vmula(a, z, neg_b, full)
@@ -124,18 +124,18 @@ def get_swiglu_backward_kernel_vmi(
         residual_bits = V.vinterpret_cast(residual, 'int32')
         sign_mask = V.vshrs(residual_bits, T.int32(31), full)
         use_bits_minus = V.vcmps(residual_bits, T.int32(0), full, 'lt')
-        delta = V.vor(sign_mask, one_i32, full)
-        adjacent = V.vinterpret_cast(V.vadd(V.vinterpret_cast(z, 'int32'), delta, full), 'float32')
+        delta = V.vor(sign_mask, one_i32)
+        adjacent = V.vinterpret_cast(V.vadd(V.vinterpret_cast(z, 'int32'), delta), 'float32')
 
         adjacent_residual = V.vmula(a, adjacent, neg_b, full)
-        residual_sum = V.vadd(residual, adjacent_residual, full)
+        residual_sum = V.vadd(residual, adjacent_residual)
         take_bits_plus = V.vcmps(residual_sum, T.float32(0.0), full, 'gt')
         is_nonzero = V.vcmps(z, T.float32(0.0), full, 'ne')
 
         take_plus_i = V.vsel(take_bits_plus, one_i32, zero_i32)
         use_minus_i = V.vsel(use_bits_minus, one_i32, zero_i32)
         nonzero_i = V.vsel(is_nonzero, one_i32, zero_i32)
-        take_adjacent_i = V.vand(V.vxor(take_plus_i, use_minus_i, full), nonzero_i, full)
+        take_adjacent_i = V.vand(V.vxor(take_plus_i, use_minus_i), nonzero_i)
         take_adjacent = V.vcmps(take_adjacent_i, T.int32(0), full, 'ne')
         return V.vsel(take_adjacent, adjacent, z)
 
@@ -149,13 +149,9 @@ def get_swiglu_backward_kernel_vmi(
             exponent_carry = V.vbrc(T.uint32(0x001FFFFF), size=vec_size)
             inverse_bias = V.vbrc(T.uint32(0x83000000), size=vec_size)
             scale_bias = V.vbrc(T.uint32(0x04000000), size=vec_size)
-            exponent = V.vand(
-                V.vadd(V.vinterpret_cast(clamped_amax, 'uint32'), exponent_carry, full),
-                exponent_mask,
-                full,
-            )
-            scale = V.vinterpret_cast(V.vsub(exponent, scale_bias, full), 'float32')
-            inverse = V.vinterpret_cast(V.vsub(inverse_bias, exponent, full), 'float32')
+            exponent = V.vand(V.vadd(V.vinterpret_cast(clamped_amax, 'uint32'), exponent_carry), exponent_mask)
+            scale = V.vinterpret_cast(V.vsub(exponent, scale_bias), 'float32')
+            inverse = V.vinterpret_cast(V.vsub(inverse_bias, exponent), 'float32')
             return scale, inverse
         quant_max = V.vbrc(T.float32(448.0), size=vec_size)
         return (
@@ -364,8 +360,8 @@ def get_swiglu_backward_kernel_vmi(
                                     y_scale = V.vbrc(V.vload(y_sf_ub[vector * 2], size=2, group=2, stride=1), size=vec_size, group=2)
                                     x_raw = V.vcvt(V.vload(x_ub[col], size=vec_size), 'float32')
                                     y_raw = V.vcvt(V.vload(y_ub[col], size=vec_size), 'float32')
-                                    x_value = V.vmul(x_raw, x_scale, full)
-                                    y_value = V.vmul(y_raw, y_scale, full)
+                                    x_value = V.vmul(x_raw, x_scale)
+                                    y_value = V.vmul(y_raw, y_scale)
                                 elif x_dtype == T.bfloat16:
                                     x_value = V.vcvt(V.vload(x_ub[col], size=vec_size), 'float32')
                                     y_value = V.vcvt(V.vload(y_ub[col], size=vec_size), 'float32')
@@ -390,15 +386,15 @@ def get_swiglu_backward_kernel_vmi(
                                 sigmoid = sigmoid_vdiv_exact_0ulp(ones, sigmoid_denominator)
                                 if with_weight or do_recompute:
                                     # Keep a separate 0-ULP division for the required FP32 rounding.
-                                    act_value = V.vmul(vdiv_exact_0ulp(x_compute_value, sigmoid_denominator), y_compute_value, full)
+                                    act_value = V.vmul(vdiv_exact_0ulp(x_compute_value, sigmoid_denominator), y_compute_value)
                                 if with_weight:
-                                    weight_contribution = V.vmul(grad, act_value, full)
+                                    weight_contribution = V.vmul(grad, act_value)
                                     weight_value = V.vmuls(weight_contribution, valid_token_f32, full) if num_experts else weight_contribution
-                                    weight_acc = V.vadd(weight_acc, weight_value, full)
-                                grad_ws = V.vmul(V.vmuls(grad, effective_weight, full), sigmoid, full)
-                                inner = V.vadd(ones, V.vmul(x_compute_value, V.vsub(ones, sigmoid, full), full), full)
-                                x_grad_unclamped = V.vmul(V.vmul(grad_ws, y_compute_value, full), inner, full)
-                                y_grad_unclamped = V.vmul(grad_ws, x_compute_value, full)
+                                    weight_acc = V.vadd(weight_acc, weight_value)
+                                grad_ws = V.vmul(V.vmuls(grad, effective_weight, full), sigmoid)
+                                inner = V.vadd(ones, V.vmul(x_compute_value, V.vsub(ones, sigmoid)))
+                                x_grad_unclamped = V.vmul(V.vmul(grad_ws, y_compute_value), inner)
+                                y_grad_unclamped = V.vmul(grad_ws, x_compute_value)
                                 x_grad_value = V.vsel(is_clamped_x, zeros, x_grad_unclamped) if use_clamp else x_grad_unclamped
                                 y_grad_value = V.vsel(is_clamped_y, zeros, y_grad_unclamped) if use_clamp else y_grad_unclamped
                                 if not with_quant:
@@ -455,8 +451,8 @@ def get_swiglu_backward_kernel_vmi(
                                     y_scale_value, y_inv = get_scale_and_inverse(V.vload(y_quant_scratch_ub[scale_offset], size=vec_size))
                                     V.vstore(x_inv, x_quant_scratch_ub[scale_offset])
                                     V.vstore(y_inv, y_quant_scratch_ub[scale_offset])
-                                    x_scale_out = V.vmul(x_scale_value, valid_token_vec, full) if num_experts else x_scale_value
-                                    y_scale_out = V.vmul(y_scale_value, valid_token_vec, full) if num_experts else y_scale_value
+                                    x_scale_out = V.vmul(x_scale_value, valid_token_vec) if num_experts else x_scale_value
+                                    y_scale_out = V.vmul(y_scale_value, valid_token_vec) if num_experts else y_scale_value
                                     if out_config.use_packed_ue8m0:
                                         x_exp = V.vshrs(V.vinterpret_cast(x_scale_out, 'uint32'), T.uint32(23), full)
                                         y_exp = V.vshrs(V.vinterpret_cast(y_scale_out, 'uint32'), T.uint32(23), full)
@@ -488,8 +484,8 @@ def get_swiglu_backward_kernel_vmi(
                                     y_inv_vec = V.vbrc(V.vload(y_quant_scratch_ub[vector * 2], size=2, group=2, stride=1), size=vec_size, group=2)
                                     x_grad_quant_value = V.vload(x_grad_f32_ub[col], size=vec_size)
                                     y_grad_quant_value = V.vload(y_grad_f32_ub[col], size=vec_size)
-                                    x_scaled_value = V.vmul(x_grad_quant_value, x_inv_vec, full)
-                                    y_scaled_value = V.vmul(y_grad_quant_value, y_inv_vec, full)
+                                    x_scaled_value = V.vmul(x_grad_quant_value, x_inv_vec)
+                                    y_scaled_value = V.vmul(y_grad_quant_value, y_inv_vec)
                                     # Explicit NOSAT, same bug A/B rationale.
                                     V.vstore(V.vcvt(x_grad_quant_value, 'bfloat16', saturate='NOSAT'), x_grad_ub[col])
                                     V.vstore(V.vcvt(y_grad_quant_value, 'bfloat16', saturate='NOSAT'), y_grad_ub[col])
@@ -521,6 +517,9 @@ def get_swiglu_backward_kernel_vmi(
                     if out_config.use_packed_ue8m0:
                         # PTO's DMA requires matching source/destination element widths.
                         # Write packed SF through uint8 views instead of ASC's uint16 view.
+                        # tilelang PR #14 (codex/unify-asc-mte-pointer-lowering) removes
+                        # this restriction, but it targets a newer pto-dev and does not
+                        # apply to our pinned 5f105e99 snapshot; keep the byte views.
                         if out_config.use_tma_aligned_col_major_sf:
                             output_sf = T.Tensor((num_stored_groups * 2, num_expanded_tokens * 2), T.uint8, x_grad_fp8_sf.data)
                         else:
