@@ -18,10 +18,7 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
     reduction_steps = (num_topk - 1).bit_length()
     topk_width = 1 << reduction_steps
     rows_per_vec = vector_length // topk_width
-    # Temporary PTO ABI: use int32 indices until T.view(int64 GM, int32)
-    # lowering is fixed. Restore the public int64 input together with the ASC
-    # int32-word view after that fix is available.
-    idx_stride = align(num_topk, 8)
+    idx_stride = align(num_topk * 2, 8)  # int64 indices viewed as pairs of int32.
     weight_stride = align(num_topk, 8)
     num_vec_cores = get_num_vec_cores()
     assert num_topk <= max_num_topk
@@ -39,7 +36,7 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
     @T.prim_func
     def moe_topk_gate_backward_kernel_vmi(
         scores: T.Tensor[(num_tokens, num_routed_experts), T.float32],
-        topk_idx: T.Tensor[(num_tokens, num_topk), T.int32],
+        topk_idx: T.Tensor[(num_tokens, num_topk), T.int64],
         topk_weights: T.Tensor[(num_tokens, num_topk), T.float32],
         grad_topk_weights: T.Tensor[(num_tokens, num_topk), T.float32],
         mask: T.Tensor[(num_tokens,), T.bool],
@@ -54,6 +51,7 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
             weight_ub = T.alloc_shared((block_m, weight_stride), T.float32)
             grad_weight_ub = T.alloc_shared((block_m, weight_stride), T.float32)
 
+            topk_idx_view = T.view(topk_idx, (num_tokens, num_topk * 2), T.int32)
             versions = {
                 scores_ub: num_stages,
                 grad_ub: num_stages,
@@ -78,7 +76,7 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
                 row_start = tile_id * num_rows
                 tile_rows = T.min(num_rows, num_tokens - row_start)
                 T.copy(scores[row_start : row_start + num_rows, :], scores_ub[:num_rows, :num_routed_experts])
-                T.copy(topk_idx[row_start : row_start + num_rows, :], idx_ub[:num_rows, :num_topk])
+                T.copy(topk_idx_view[row_start : row_start + num_rows, :], idx_ub[:num_rows, : num_topk * 2])
                 T.copy(topk_weights[row_start : row_start + num_rows, :], weight_ub[:num_rows, :num_topk])
                 T.copy(grad_topk_weights[row_start : row_start + num_rows, :], grad_weight_ub[:num_rows, :num_topk])
                 if aux_exists:
@@ -95,7 +93,7 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
                     one = V.vbrc(T.float32(1.0), size=vector_length)
                     local_row = V.vshr(lanes, V.vbrc(T.int32(reduction_steps), size=vector_length), full)
                     local_k = V.vand(lanes, V.vbrc(T.int32(topk_width - 1), size=vector_length), full)
-                    idx_offsets = V.vinterpret_cast(V.vadd(V.vmul(local_row, V.vbrc(T.int32(idx_stride), size=vector_length), full), local_k, full), 'uint32')
+                    idx_offsets = V.vinterpret_cast(V.vadd(V.vmul(local_row, V.vbrc(T.int32(idx_stride), size=vector_length), full), V.vmuls(local_k, T.int32(2), full), full), 'uint32')
                     weight_offsets = V.vinterpret_cast(V.vadd(V.vmul(local_row, V.vbrc(T.int32(weight_stride), size=vector_length), full), local_k, full), 'uint32')
                     score_row_offsets = V.vmul(local_row, V.vbrc(T.int32(num_aligned_experts), size=vector_length), full)
                     for j in T.serial(tile_rows * num_vregs):
