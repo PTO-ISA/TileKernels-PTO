@@ -101,31 +101,58 @@ def sqrt_softplus_forward_asc(logit):
     return _assemble_softsqrt(logit, l)
 
 
+@T.macro
+def _horner_Pt_vmi(t, mask, size):
+    poly = V.vbrc(T.float32(_FORWARD_COEFFS[0]), size=size)
+    for coeff in _FORWARD_COEFFS[1:]:
+        poly = V.vmula(V.vbrc(T.float32(coeff), size=size), poly, t, mask)
+    return poly
+
+
+@T.macro
+def _vsqrt_rne_vmi(x, one, mask):
+    root0 = V.vsqrt(x, mask)
+    recip0 = V.vdiv(one, root0, mask, precision='ftz_true')
+    root1 = V.vmuls(V.vadd(root0, V.vmul(x, recip0, mask), mask), T.float32(0.5), mask)
+    resid = V.vmula(V.vneg(x, mask), root1, root1, mask)
+    corr = V.vmuls(recip0, T.float32(-0.5), mask)
+    return V.vmula(root1, resid, corr, mask)
+
+
+@T.macro
+def _assemble_sqrt_vmi(x, l, one, mask):
+    s = V.vmula(V.vrelu(x, mask), l, l, mask)
+    return _vsqrt_rne_vmi(s, one, mask)
+
+
+@T.macro
+def _exp_neg_half_abs_vmi(x, mask):
+    return V.vexp(V.vmuls(V.vabs(x), T.float32(-0.5), mask), mask)
+
+
+@T.macro
+def _sqrt_log1p_vmi(a, one, mask, size):
+    t = V.vsub(one, V.vmul(a, a, mask), mask)
+    g = V.vmula(V.vbrc(T.float32(_G0), size=size), t, _horner_Pt_vmi(t, mask, size), mask)
+    return V.vmul(a, g, mask)
+
+
+@T.macro
+def _assemble_softsqrt_vmi(x, l, one, mask):
+    root2 = _assemble_sqrt_vmi(x, l, one, mask)
+    positive = V.vcmps(x, T.float32(0.0), mask, 'gt')
+    return V.vsel(positive, root2, l)
+
+
 # VMI spelling of the same approximation.  The lane width and mask are
 # explicit because VMI carries logical vectors rather than ASC's physical
 # 256-byte layout.
 @T.macro
 def sqrt_softplus_forward_vmi(logit, mask, size):
     one = V.vbrc(T.float32(1.0), size=size)
-    half = V.vbrc(T.float32(0.5), size=size)
-    neg_half_abs = V.vmuls(V.vabs(logit), T.float32(-0.5), mask)
-    a = V.vexp(neg_half_abs, mask)
-    t = V.vsub(one, V.vmul(a, a, mask), mask)
-    poly = V.vbrc(T.float32(_FORWARD_COEFFS[0]), size=size)
-    for coeff in _FORWARD_COEFFS[1:]:
-        poly = V.vmula(V.vbrc(T.float32(coeff), size=size), poly, t, mask)
-    g = V.vmula(V.vbrc(T.float32(_G0), size=size), t, poly, mask)
-    l = V.vmul(a, g, mask)
-    x_pos = V.vrelu(logit, mask)
-    s = V.vmula(x_pos, l, l, mask)
-    root0 = V.vsqrt(s, mask)
-    recip0 = V.vdiv(one, root0, mask, precision='ftz_true')
-    root1 = V.vmul(V.vadd(root0, V.vmul(s, recip0, mask), mask), half, mask)
-    resid = V.vmula(V.vneg(s, mask), root1, root1, mask)
-    corr = V.vmuls(recip0, T.float32(-0.5), mask)
-    root2 = V.vmula(root1, resid, corr, mask)
-    positive = V.vcmp(logit, V.vbrc(T.float32(0.0), size=size), mask, 'gt')
-    return V.vsel(positive, root2, l)
+    a = _exp_neg_half_abs_vmi(logit, mask)
+    l = _sqrt_log1p_vmi(a, one, mask, size)
+    return _assemble_softsqrt_vmi(logit, l, one, mask)
 
 
 # Q(u) coefficients in descending degree (Horner order), shared by both backends.

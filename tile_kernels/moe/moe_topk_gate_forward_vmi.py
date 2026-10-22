@@ -151,7 +151,7 @@ def get_moe_topk_gate_forward_kernel_vmi(
                     invalid = V.alloc_var(T.int32, size=vector_length)
                     invalid = V.vload(invalid_logits_ub[0], size=vector_length)
                     if fix_routing_mask_exists:
-                        topk_lanes = V.vcmp(lanes, V.vbrc(T.int32(num_topk), size=vector_length), full, 'lt')
+                        topk_lanes = V.vcmps(lanes, T.int32(num_topk), full, 'lt')
                     for row in T.serial(num_rows):
                         active = T.alloc_var(T.bool, init=row_start + row < num_tokens)
                         if mask_exists:
@@ -165,10 +165,10 @@ def get_moe_topk_gate_forward_kernel_vmi(
                             if active and fix_routing_mask_ub[row]:
                                 fixed_offsets = V.vinterpret_cast(lanes, 'uint32')
                                 fixed_idx = V.vgather(unmapped_idx_ub[row, 0], fixed_offsets, topk_lanes)
-                                invalid_idx = V.vcmp(fixed_idx, zeros, topk_lanes, 'lt')
+                                invalid_idx = V.vcmps(fixed_idx, T.int32(0), topk_lanes, 'lt')
                                 invalid = V.vmax(invalid, V.vsel(invalid_idx, ones, zeros))
                         active_vec = V.vbrc(T.cast(active, T.int32), size=vector_length)
-                        active_lanes = V.vcmp(active_vec, zeros, full, 'ne')
+                        active_lanes = V.vcmps(active_vec, T.int32(0), full, 'ne')
                         for j in T.serial(num_vregs):
                             group_base = j * vector_length
                             indices = V.vci(group_base, size=vector_length)
@@ -178,7 +178,7 @@ def get_moe_topk_gate_forward_kernel_vmi(
                             if not experts_aligned:
                                 logit = V.vsel(valid, logit, zero)
                             logit = V.vsel(active_lanes, logit, zero)
-                            nonfinite = V.vcmp(V.vsub(logit, logit), zero, full, 'ne')
+                            nonfinite = V.vcmps(V.vsub(logit, logit), T.float32(0.0), full, 'ne')
                             invalid = V.vmax(invalid, V.vsel(nonfinite, ones, zeros))
                             score = V.alloc_var(T.float32, size=vector_length)
                             score = sqrt_softplus_forward_vmi(logit, full, vector_length)
