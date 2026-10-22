@@ -92,11 +92,7 @@ def mhc_sinkhorn_fwd_vmi(
                 one = V.vbrc(T.int32(1), size=64)
                 two = V.vbrc(T.int32(2), size=64)
                 pair_swap_idx = V.vxor(idx, one)
-                row_base = V.vand(idx, V.vbrc(T.int32(-4), size=64))
-                cross_pair_idx = V.vadd(
-                    V.vsub(V.vadd(row_base, two), V.vand(idx, two)),
-                    V.vand(idx, one),
-                )
+                cross_pair_idx = V.vxor(idx, two)
                 eps_b = V.vbrc(T.float32(eps), size=64)
 
                 # Load 4 tokens x 16 elements = 64 fp32
@@ -205,11 +201,7 @@ def mhc_sinkhorn_bwd_vmi(
                 one = V.vbrc(T.int32(1), size=64)
                 two = V.vbrc(T.int32(2), size=64)
                 pair_swap_idx = V.vxor(idx, one)
-                row_base = V.vand(idx, V.vbrc(T.int32(-4), size=64))
-                cross_pair_idx = V.vadd(
-                    V.vsub(V.vadd(row_base, two), V.vand(idx, two)),
-                    V.vand(idx, one),
-                )
+                cross_pair_idx = V.vxor(idx, two)
                 eps_b = V.vbrc(T.float32(eps), size=64)
 
                 # VR1 starts at token 4 (4 tokens per VR)
