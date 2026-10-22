@@ -37,8 +37,7 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
             if num_groups > 1:
                 with T.SimdVF():
                     for j in T.unroll(ceil_div(aligned_experts, logical_lanes), explicit=True):
-                        index_block = V.vci(T.int32(j * logical_lanes), size=logical_lanes)
-                        V.vstore(index_block, indices_ub[j * logical_lanes], stride=1, group=1)
+                        V.vstore(V.vci(T.int32(j * logical_lanes), size=logical_lanes), indices_ub[j * logical_lanes], stride=1, group=1)
                     S.mem_bar("VST_VLD")
 
             for w in T.Pipelined(
@@ -66,26 +65,22 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
                                 scores_vec[i] = V.vload(scores_ub[i * logical_lanes], size=logical_lanes)
                                 index_vec[i] = V.vci(T.int32(i * logical_lanes), size=logical_lanes)
                                 if has_padding:
-                                    valid = V.vcmp(index_vec[i], expert_limit, full, "lt")
-                                    scores_vec[i] = V.vsel(valid, scores_vec[i], neg_inf)
+                                    scores_vec[i] = V.vsel(V.vcmp(index_vec[i], expert_limit, full, "lt"), scores_vec[i], neg_inf)
                             for k in T.serial(num_topk):
                                 maximum = scores_vec[0]
                                 for i in T.unroll(1, num_vregs_per_group, explicit=True):
                                     maximum = V.vmax(maximum, scores_vec[i], full)
                                 maximum = V.vbrc(V.vcmax(maximum, full), size=logical_lanes)
-                                is_max = V.vcmp(scores_vec[0], maximum, full, "eq")
-                                winner_vec = V.vsel(is_max, index_vec[0], int_max)
+                                winner_vec = V.vsel(V.vcmp(scores_vec[0], maximum, full, "eq"), index_vec[0], int_max)
                                 for i in T.unroll(1, num_vregs_per_group, explicit=True):
-                                    is_max = V.vcmp(scores_vec[i], maximum, full, "eq")
-                                    candidates = V.vsel(is_max, index_vec[i], int_max)
+                                    candidates = V.vsel(V.vcmp(scores_vec[i], maximum, full, "eq"), index_vec[i], int_max)
                                     winner_vec = V.vmin(candidates, winner_vec, full)
                                 winner_1 = V.vcmin(winner_vec, full)
                                 winner = V.vbrc(winner_1, size=logical_lanes)
                                 V.vstore(winner_1, out_ub[2 * k], stride=1, group=1)
                                 V.vstore(zero_1, out_ub[2 * k + 1], stride=1, group=1)
                                 for i in T.unroll(num_vregs_per_group, explicit=True):
-                                    is_winner = V.vcmp(index_vec[i], winner, full, "eq")
-                                    scores_vec[i] = V.vsel(is_winner, neg_inf, scores_vec[i])
+                                    scores_vec[i] = V.vsel(V.vcmp(index_vec[i], winner, full, "eq"), neg_inf, scores_vec[i])
                         else:
                             for k in T.serial(num_topk):
                                 maximum = neg_inf
@@ -93,9 +88,7 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
                                     for i in T.unroll(num_vregs_per_group, explicit=True):
                                         offset = group_id * experts_per_group + i * logical_lanes
                                         indices = V.vload(indices_ub[offset], size=logical_lanes)
-                                        values = V.vload(scores_ub[offset], size=logical_lanes)
-                                        valid = V.vcmp(indices, expert_limit, full, "lt")
-                                        values = V.vsel(valid, values, neg_inf)
+                                        values = V.vsel(V.vcmp(indices, expert_limit, full, "lt"), V.vload(scores_ub[offset], size=logical_lanes), neg_inf)
                                         maximum = V.vmax(maximum, values, full)
                                 maximum = V.vbrc(V.vcmax(maximum, full), size=logical_lanes)
                                 winner_vec = int_max
@@ -103,11 +96,8 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
                                     for i in T.unroll(num_vregs_per_group, explicit=True):
                                         offset = group_id * experts_per_group + i * logical_lanes
                                         indices = V.vload(indices_ub[offset], size=logical_lanes)
-                                        values = V.vload(scores_ub[offset], size=logical_lanes)
-                                        valid = V.vcmp(indices, expert_limit, full, "lt")
-                                        values = V.vsel(valid, values, neg_inf)
-                                        is_max = V.vcmp(values, maximum, full, "eq")
-                                        candidates = V.vsel(is_max, indices, int_max)
+                                        values = V.vsel(V.vcmp(indices, expert_limit, full, "lt"), V.vload(scores_ub[offset], size=logical_lanes), neg_inf)
+                                        candidates = V.vsel(V.vcmp(values, maximum, full, "eq"), indices, int_max)
                                         winner_vec = V.vmin(candidates, winner_vec, full)
                                 winner_1 = V.vcmin(winner_vec, full)
                                 winner = V.vbrc(winner_1, size=logical_lanes)
@@ -117,9 +107,7 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
                                     for i in T.unroll(num_vregs_per_group, explicit=True):
                                         offset = group_id * experts_per_group + i * logical_lanes
                                         indices = V.vload(indices_ub[offset], size=logical_lanes)
-                                        is_winner = V.vcmp(indices, winner, full, "eq")
-                                        values = V.vload(scores_ub[offset], size=logical_lanes)
-                                        values = V.vsel(is_winner, neg_inf, values)
+                                        values = V.vsel(V.vcmp(indices, winner, full, "eq"), neg_inf, V.vload(scores_ub[offset], size=logical_lanes))
                                         V.vstore(values, scores_ub[offset], stride=1, group=1)
                                 S.mem_bar("VST_VLD")
                     T.copy(out_ub[: num_topk * 2], topk_idx_view[row, :])
