@@ -81,7 +81,7 @@ def get_cast_kernel_vmi(
             mask128 = V.create_mask(128, size=128)
             in_chunk = V.alloc_local((4,), V.vreg(64, T.uint32))
             tmp = V.alloc_local((4,), V.vreg(64, T.uint32))
-            for i in T.unroll(half_reps):
+            for i in T.serial(half_reps):
                 offset = i * vec_len
                 for j in T.unroll(4, explicit=True):
                     in_chunk[j] = V.vinterpret_cast(V.vload(x_ub[offset + j * vec_len // 4], size=64), 'uint32')
