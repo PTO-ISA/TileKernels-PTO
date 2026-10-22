@@ -9,7 +9,7 @@ from tile_kernels.config import get_max_ub_per_vector_core, get_num_vec_cores
 SIMD_LANES = 64
 
 
-@tilelang.jit(target="pto")
+@tilelang.jit(target='pto')
 def get_rope_kernel_vmi(
     dtype: T.dtype,
     positions_dtype: T.dtype,
@@ -36,11 +36,11 @@ def get_rope_kernel_vmi(
     block_tokens = 1 << (ub_block_tokens.bit_length() - 1)
     can_bulk_copy = x_stride_0 == nheads * x_stride_1 or x_stride_1 == rotary_dim
 
-    batch = T.dynamic("batch")
-    seqlen = T.dynamic("seqlen")
-    seqlen_ro = T.dynamic("seqlen_ro")
-    x_stride_b = T.dynamic("x_stride_b")
-    positions_stride_b = T.dynamic("positions_stride_b")
+    batch = T.dynamic('batch')
+    seqlen = T.dynamic('seqlen')
+    seqlen_ro = T.dynamic('seqlen_ro')
+    x_stride_b = T.dynamic('x_stride_b')
+    positions_stride_b = T.dynamic('positions_stride_b')
 
     @T.macro
     def rotate(
@@ -51,10 +51,8 @@ def get_rope_kernel_vmi(
         neg_sine: T.float32x64,
     ) -> tuple[T.float32x64, T.float32x64]:
         mask = V.create_mask(SIMD_LANES, size=SIMD_LANES)
-        out_first = V.vmul(second, sine)
-        out_first = V.vmula(out_first, first, cosine, mask)
-        out_second = V.vmul(second, cosine)
-        out_second = V.vmula(out_second, first, neg_sine, mask)
+        out_first = V.vmula(V.vmul(second, sine), first, cosine, mask)
+        out_second = V.vmula(V.vmul(second, cosine), first, neg_sine, mask)
         return out_first, out_second
 
     @T.macro
@@ -69,8 +67,8 @@ def get_rope_kernel_vmi(
         first = V.vload(buffer[row, first_head, first_column], size=SIMD_LANES)
         second = V.vload(buffer[row, second_head, second_column], size=SIMD_LANES)
         if dtype == T.bfloat16:
-            first = V.vcvt(first, "float32")
-            second = V.vcvt(second, "float32")
+            first = V.vcvt(first, 'float32')
+            second = V.vcvt(second, 'float32')
         return first, second
 
     @T.macro
@@ -86,46 +84,12 @@ def get_rope_kernel_vmi(
         has_second: bool,
     ) -> None:
         if dtype == T.bfloat16:
-            first = V.vcvt(first, "bfloat16")
+            first = V.vcvt(first, 'bfloat16')
             if has_second:
-                second = V.vcvt(second, "bfloat16")
+                second = V.vcvt(second, 'bfloat16')
         V.vstore(first, buffer[row, first_head, first_column])
         if has_second:
             V.vstore(second, buffer[row, second_head, second_column])
-
-    @T.macro
-    def permute_dim64(
-        first: T.float32x64,
-        second: T.float32x64,
-        restore: bool,
-        mask: T.bool,
-    ) -> tuple[T.float32x64, T.float32x64]:
-        if interleaved:
-            if restore:
-                first, second = V.vintlv(first, second, mask)
-            else:
-                first, second = V.vdintlv(first, second, mask)
-        else:
-            if restore:
-                first, second = V.vdintlv(first, second, mask)
-            else:
-                first, second = V.vintlv(first, second, mask)
-        return first, second
-
-    @T.macro
-    def permute_dim128(
-        first: T.float32x64,
-        second: T.float32x64,
-        restore: bool,
-        mask: T.bool,
-    ) -> tuple[T.float32x64, T.float32x64]:
-        if interleaved:
-            if restore:
-                first, second = V.vintlv(first, second, mask)
-            else:
-                first, second = V.vdintlv(first, second, mask)
-
-        return first, second
 
     @T.prim_func
     def _rope_kernel(
@@ -145,14 +109,12 @@ def get_rope_kernel_vmi(
             ):
                 token_start = token_block * block_tokens
                 rows = T.min(block_tokens, seqlen - token_start)
-
                 if can_bulk_copy:
                     T.copy(x[batch_id, token_start, 0, 0], x_ub[:rows, :, :])
                 else:
                     for row in T.serial(block_tokens):
                         if row < rows:
                             T.copy(x[batch_id, token_start + row, 0, 0], x_ub[row, :, :])
-
                 if has_position_tensor:
                     for row in T.serial(block_tokens):
                         if row < rows:
@@ -163,55 +125,47 @@ def get_rope_kernel_vmi(
                     T.copy(cos_sin_cache[position, 0], cos_sin_ub[:rows, :])
 
                 with T.SimdVF():
-                    full_mask = V.create_mask(SIMD_LANES, size=SIMD_LANES)
+                    mask = V.create_mask(SIMD_LANES, size=SIMD_LANES)
                     if rotary_dim == SIMD_LANES and interleaved:
-                        lanes = V.vci(T.int32(0), size=SIMD_LANES)
-                        cos_indices = V.vand(lanes, V.vbrc(T.int32(31), size=SIMD_LANES))
-                        sin_indices = V.vor(cos_indices, V.vbrc(T.int32(32), size=SIMD_LANES))
+                        cos_indices = V.vand(V.vci(T.uint32(0), size=SIMD_LANES), V.vbrc(T.uint32(31), size=SIMD_LANES),)
+                        sin_indices = V.vor(cos_indices, V.vbrc(T.uint32(32), size=SIMD_LANES))
                     for row in T.serial(block_tokens):
                         if rotary_dim == SIMD_LANES:
                             cos_sin_values = V.vload(cos_sin_ub[row, 0], size=SIMD_LANES)
                             if interleaved:
-                                cosine = V.vselr(cos_sin_values, cos_indices)
-                                sine = V.vselr(cos_sin_values, sin_indices)
+                                cosine = V.vgather(cos_sin_ub[row, 0], cos_indices, mask)
+                                sine = V.vgather(cos_sin_ub[row, 0], sin_indices, mask)
                             else:
-                                cosine, sine = V.vintlv(cos_sin_values, cos_sin_values, full_mask)
+                                cosine, sine = V.vintlv(cos_sin_values, cos_sin_values, mask)
                         else:
                             cosine = V.vload(cos_sin_ub[row, 0], size=SIMD_LANES)
                             sine = V.vload(cos_sin_ub[row, half_dim], size=SIMD_LANES)
-
-                        if conjugate:
-                            neg_sine = V.vneg(sine)
-                        else:
-                            neg_sine, sine = sine, V.vneg(sine)
+                        sine, neg_sine = (sine, V.vneg(sine)) if conjugate else (V.vneg(sine), sine)
 
                         if rotary_dim == SIMD_LANES:
                             for pair in range(nheads // 2):
                                 head = pair * 2
                                 first, second = load2(x_ub, row, head, 0, head + 1, 0)
-
-                                first, second = permute_dim64(first, second, False, full_mask)
-
+                                first, second = V.vdintlv(first, second, mask) if interleaved else V.vintlv(first, second, mask)
                                 first, second = rotate(first, second, cosine, sine, neg_sine)
-                                first, second = permute_dim64(first, second, True, full_mask)
-
+                                first, second = V.vintlv(first, second, mask) if interleaved else V.vdintlv(first, second, mask)
                                 store2(x_ub, row, head, 0, head + 1, 0, first, second, True)
-
                             if nheads % 2:
                                 odd_head = nheads - 1
                                 first, second = load2(x_ub, row, odd_head, 0, odd_head, 0)
-                                first, second = permute_dim64(first, second, False, full_mask)
+                                first, second = V.vdintlv(first, second, mask) if interleaved else V.vintlv(first, second, mask)
                                 first, second = rotate(first, second, cosine, sine, neg_sine)
-                                first, second = permute_dim64(first, second, True, full_mask)
+                                first, second = V.vintlv(first, second, mask) if interleaved else V.vdintlv(first, second, mask)
                                 store2(x_ub, row, odd_head, 0, odd_head, 0, first, second, False)
                         else:
                             for head in range(nheads):
                                 first, second = load2(x_ub, row, head, 0, head, half_dim)
-                                first, second = permute_dim128(first, second, False, full_mask)
+                                if interleaved:
+                                    first, second = V.vdintlv(first, second, mask)
                                 first, second = rotate(first, second, cosine, sine, neg_sine)
-                                first, second = permute_dim128(first, second, True, full_mask)
+                                if interleaved:
+                                    first, second = V.vintlv(first, second, mask)
                                 store2(x_ub, row, head, 0, head, half_dim, first, second, True)
-
                 if can_bulk_copy:
                     T.copy(x_ub[:rows, :, :], x[batch_id, token_start, 0, 0])
                 else:
