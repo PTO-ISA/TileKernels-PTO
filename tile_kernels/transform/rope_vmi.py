@@ -119,8 +119,6 @@ def get_rope_kernel_vmi(
         restore: bool,
         mask: T.bool,
     ) -> tuple[T.float32x64, T.float32x64]:
-        if dtype == T.bfloat16:
-            return first, second
         if interleaved:
             if restore:
                 first, second = V.vintlv(first, second, mask)
