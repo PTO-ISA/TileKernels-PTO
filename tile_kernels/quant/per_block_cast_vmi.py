@@ -33,7 +33,7 @@ def get_per_block_cast_kernel_vmi(
     assert num_sf_cols_per_block % pack_factor == 0
     packed_sf_cols_per_block = num_sf_cols_per_block // pack_factor
     num_stored_sf_cols_per_block = packed_sf_cols_per_block if out_config.use_packed_ue8m0 else num_sf_cols_per_block
-    sf_ub_dtype = T.uint8 if out_config.use_packed_ue8m0 else T.float32
+    sf_ub_dtype = T.uint16 if out_config.use_packed_ue8m0 else T.float32
 
     token_group = 4 if out_config.use_tma_aligned_col_major_sf and out_config.use_packed_ue8m0 else 1
 
@@ -62,13 +62,38 @@ def get_per_block_cast_kernel_vmi(
     @T.macro
     def store_scale_four(sf_ub, sf_row, sf_j, scale4, mask4):
         if out_config.use_packed_ue8m0:
+            # One ue8m0 exponent byte per (32, 32) block; two of them form one
+            # packed uint16 word.  The width-changing bitcast pairs the four
+            # bytes into a single u32 (PTOAS materializes the group-slots ->
+            # contiguous repack on the boundary) and the equal-width bitcast
+            # back to u16 yields the two packed words.
             _, high16 = V.vunzip(V.vinterpret_cast(scale4, 'uint32'), to_dtype='uint16')
             exponent16 = V.vshrs(high16, 7, mask4)
             exponent8 = V.vcvt(exponent16, 'uint8', saturate='NOSAT')
+            packed32 = V.vinterpret_cast(exponent8, 'uint32')   # 1 x ui32
             if out_config.use_tma_aligned_col_major_sf:
-                V.vstore(exponent8, sf_ub[sf_j // pack_factor, 0], V.create_mask(4, size=4))
+                # One word per point store, matching the ASC path: 1PT writes the
+                # exact element and needs no alignment or row stride.
+                #
+                # TODO(per_block_cast): why split into two 1-lane values here?
+                # A single 2-lane value stored with group=2/stride=token_group
+                # lowers to either sparse-mask vsts or vscatter, and both fault
+                # on A5 (device error 507035) because the per-word target is a
+                # single, non-32B-aligned element.  The 1PT point store used by
+                # the ASC kernel writes one element at an exact address with the
+                # predicate ignored, so emit one such store per word.  The
+                # alternative is to let the layout carry the split (a gs(4,2)
+                # scale layout with the ratio-scaled bitcast relation), which
+                # would need a 4->2 part repack; revisit if the extra
+                # vshls/vshrs/vcvt per chunk shows up in the profile.
+                mask1 = V.create_mask(1, size=1)
+                lo = V.vcvt(V.vshrs(V.vshls(packed32, 16, mask1), 16, mask1), 'uint16', saturate='NOSAT')
+                hi = V.vcvt(V.vshrs(packed32, 16, mask1), 'uint16', saturate='NOSAT')
+                V.vstore(lo, sf_ub[sf_j // pack_factor, sf_row], group=1, stride=1)
+                V.vstore(hi, sf_ub[sf_j // pack_factor + 1, sf_row], group=1, stride=1)
             else:
-                V.vstore(exponent8, sf_ub[0, sf_j], V.create_mask(4, size=4))
+                packed16 = V.vinterpret_cast(packed32, 'uint16')
+                V.vstore(packed16, sf_ub[sf_row, sf_j // pack_factor], group=2, stride=1)
         elif out_config.use_tma_aligned_col_major_sf:
             V.vstore(scale4, sf_ub[sf_j, sf_row], group=4, stride=token_group)
         else:
@@ -152,11 +177,7 @@ def get_per_block_cast_kernel_vmi(
         with T.Kernel(num_vec_cores) as core_id:
             x_ub = T.alloc_shared((block_m, block_k), in_config.dtype)
             sf_cols = max(num_stored_sf_cols_per_block, 16 // token_group if out_config.use_packed_ue8m0 else 8)
-            if out_config.use_packed_ue8m0 and out_config.use_tma_aligned_col_major_sf:
-                sf_ub = T.alloc_shared((sf_cols, pack_factor), sf_ub_dtype)
-            elif out_config.use_packed_ue8m0:
-                sf_ub = T.alloc_shared((1, sf_cols * pack_factor), sf_ub_dtype)
-            elif out_config.use_tma_aligned_col_major_sf:
+            if out_config.use_tma_aligned_col_major_sf:
                 sf_ub = T.alloc_shared((sf_cols, token_group), sf_ub_dtype)
             else:
                 sf_ub = T.alloc_shared((token_group, sf_cols), sf_ub_dtype)
@@ -185,22 +206,14 @@ def get_per_block_cast_kernel_vmi(
                     quant_block(x_ub, sf_ub, out_ub, token_offset)
                     if not sf_only:
                         T.copy(out_ub[0:block_m, 0:block_k], out[token_block * block_m, pid_y * block_k])
-                    if not cast_only and out_config.use_packed_ue8m0:
-                        if out_config.use_tma_aligned_col_major_sf:
-                            T.copy(
-                                sf_ub[0:num_stored_sf_cols_per_block, 0:pack_factor],
-                                out_sf[stored_sf_k_base, token_block * pack_factor],
-                            )
-                        else:
-                            T.copy(
-                                sf_ub[0:1, 0:num_stored_sf_cols_per_block * pack_factor],
-                                out_sf[token_block, stored_sf_k_base * pack_factor],
-                            )
-
-                if not cast_only and not out_config.use_packed_ue8m0:
-                    if out_config.use_tma_aligned_col_major_sf:
-                        T.copy(sf_ub[0:num_stored_sf_cols_per_block, 0:token_group], out_sf[stored_sf_k_base, sf_m_base])
+                if not cast_only:
+                    if out_config.use_packed_ue8m0:
+                        output_sf = T.Tensor((sf_shape[0], sf_shape[1] // pack_factor), T.uint16, out_sf.data)
                     else:
-                        T.copy(sf_ub[0:token_group, 0:num_stored_sf_cols_per_block], out_sf[sf_m_base, stored_sf_k_base])
+                        output_sf = out_sf
+                    if out_config.use_tma_aligned_col_major_sf:
+                        T.copy(sf_ub[0:num_stored_sf_cols_per_block, 0:token_group], output_sf[stored_sf_k_base, sf_m_base])
+                    else:
+                        T.copy(sf_ub[0:token_group, 0:num_stored_sf_cols_per_block], output_sf[sf_m_base, stored_sf_k_base])
 
     return per_block_cast_kernel_vmi
