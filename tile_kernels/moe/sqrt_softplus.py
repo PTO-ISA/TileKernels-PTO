@@ -174,15 +174,32 @@ def sqrt_softplus_backward_asc(y):
 
 @T.macro
 def sqrt_softplus_backward_vmi(y, mask, size):
+    """Scalar Horner form for the sparse routed gradient."""
     one = V.vbrc(T.float32(1.0), size=size)
-    half = V.vbrc(T.float32(0.5), size=size)
     u = V.vmul(y, y, mask)
     q = V.vbrc(T.float32(_BACKWARD_COEFFS[0]), size=size)
     for coeff in _BACKWARD_COEFFS[1:]:
-        q = V.vmula(V.vbrc(T.float32(coeff), size=size), q, u, mask)
-    half_y = V.vmul(y, half, mask)
+        q = V.vadds(V.vmul(q, u, mask), T.float32(coeff), mask)
+    half_y = V.vmuls(y, T.float32(0.5), mask)
     small = V.vmula(half_y, V.vmul(u, q, mask), half_y, mask)
     numerator = V.vsub(one, V.vexp(V.vneg(u, mask), mask), mask)
-    large = V.vmul(V.vdiv(numerator, y, mask, precision='ftz_true'), half, mask)
-    is_small = V.vcmp(u, one, mask, 'lt')
-    return V.vsel(is_small, small, large)
+    large = V.vmuls(V.vdiv(numerator, y, mask, precision='ftz_true'), T.float32(0.5), mask)
+    return V.vsel(V.vcmps(u, T.float32(1.0), mask, 'lt'), small, large)
+
+
+@T.macro
+def sqrt_softplus_backward_vmi_dense(y, mask, size):
+    """Estrin form for the dense auxiliary gradient; faster in the full kernel."""
+    one = V.vbrc(T.float32(1.0), size=size)
+    u = V.vmul(y, y, mask)
+    u2 = V.vmul(u, u, mask)
+    a = V.vaxpy(u, V.vbrc(T.float32(_BACKWARD_COEFFS[1]), size=size), T.float32(_BACKWARD_COEFFS[0]), mask)
+    b = V.vaxpy(u, V.vbrc(T.float32(_BACKWARD_COEFFS[3]), size=size), T.float32(_BACKWARD_COEFFS[2]), mask)
+    c = V.vaxpy(u, V.vbrc(T.float32(_BACKWARD_COEFFS[5]), size=size), T.float32(_BACKWARD_COEFFS[4]), mask)
+    q = V.vmula(b, a, u2, mask)
+    q = V.vmula(c, q, u2, mask)
+    half_y = V.vmuls(y, T.float32(0.5), mask)
+    small = V.vmula(half_y, V.vmul(u, q, mask), half_y, mask)
+    numerator = V.vsub(one, V.vexp(V.vneg(u, mask), mask), mask)
+    large = V.vmuls(V.vdiv(numerator, y, mask, precision='ftz_true'), T.float32(0.5), mask)
+    return V.vsel(V.vcmps(u, T.float32(1.0), mask, 'lt'), small, large)
