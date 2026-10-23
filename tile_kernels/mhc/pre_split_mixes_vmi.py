@@ -455,9 +455,6 @@ def mhc_pre_split_mixes_bwd_mhc4_vmi(
             idx = V.vci(T.int32(0), size=64)
             col3 = V.vand(idx, V.vbrc(T.int32(3), size=64))
             col15 = V.vand(idx, V.vbrc(T.int32(15), size=64))
-            # ASC vcadd pairwise-reduces the active lanes and stores the
-            # single result (ONEPT_B32); VMI vcadd returns a 1-lane vreg, so
-            # store it directly as an unmasked one-lane (scalar) store.
             for i in T.unroll(3, explicit=True):
                 total = V.vcadd(V.vload(scale_grad_acc_ub[i, 0], size=64), mask_full, reassoc=True)
                 V.vstore(total, scale_grad_out_ub[i, 0])
