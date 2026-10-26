@@ -116,7 +116,8 @@ def _vsqrt_rne_vmi(x, one, mask):
     root1 = V.vmuls(V.vadd(root0, V.vmul(x, recip0, mask), mask), T.float32(0.5), mask)
     resid = V.vmula(V.vneg(x, mask), root1, root1, mask)
     corr = V.vmuls(recip0, T.float32(-0.5), mask)
-    return V.vmula(root1, resid, corr, mask)
+    root2 = V.vmula(root1, resid, corr, mask)
+    return root2
 
 
 @T.macro
@@ -127,21 +128,22 @@ def _assemble_sqrt_vmi(x, l, one, mask):
 
 @T.macro
 def _exp_neg_half_abs_vmi(x, mask):
-    return V.vexp(V.vmuls(V.vabs(x), T.float32(-0.5), mask), mask)
+    neg_half_abs = V.vmuls(V.vabs(x), T.float32(-0.5), mask)
+    return V.vexp(neg_half_abs, mask)
 
 
 @T.macro
 def _sqrt_log1p_vmi(a, one, mask, size):
     t = V.vsub(one, V.vmul(a, a, mask), mask)
-    g = V.vmula(V.vbrc(T.float32(_G0), size=size), t, _horner_Pt_vmi(t, mask, size), mask)
-    return V.vmul(a, g, mask)
+    p = _horner_Pt_vmi(t, mask, size)
+    t = V.vmula(V.vbrc(T.float32(_G0), size=size), t, p, mask)
+    return V.vmul(a, t, mask)
 
 
 @T.macro
 def _assemble_softsqrt_vmi(x, l, one, mask):
-    root2 = _assemble_sqrt_vmi(x, l, one, mask)
-    positive = V.vcmps(x, T.float32(0.0), mask, 'gt')
-    return V.vsel(positive, root2, l)
+    y_pos = _assemble_sqrt_vmi(x, l, one, mask)
+    return V.vsel(V.vcmps(x, T.float32(0.0), mask, 'gt'), y_pos, l)
 
 
 # VMI spelling of the same approximation.  The lane width and mask are
