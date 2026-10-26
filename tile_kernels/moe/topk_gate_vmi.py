@@ -8,108 +8,140 @@ from tile_kernels.utils import align, ceil_div
 
 @tilelang.jit(target="pto")
 def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int):
-    logical_lanes = 64
-    max_vregs_per_group = 6
-    num_vregs_per_group = ceil_div(min(num_experts, max_vregs_per_group * logical_lanes), logical_lanes)
-    experts_per_group = num_vregs_per_group * logical_lanes
-    num_groups = ceil_div(num_experts, experts_per_group)
-    aligned_experts = num_groups * experts_per_group
-    aligned_topk_words = align(num_topk * 2, logical_lanes)
-    num_tokens = T.dynamic("num_tokens")
     num_stages = 6
+    vector_length = 64  # SIMD vector length (float32 lanes per vreg)
+
+    # Adaptive: use only as many vregs as needed when num_experts <= 256.
+    max_vregs_per_group = 6
+    num_vregs_per_group = ceil_div(min(num_experts, max_vregs_per_group * vector_length), vector_length)
+    experts_per_group = num_vregs_per_group * vector_length
+    num_groups = ceil_div(num_experts, experts_per_group)
+    num_aligned_experts = num_groups * experts_per_group
+
+    # Each int64 output index is represented by two int32 words in UB.
+    num_aligned_topk = align(num_topk * 2, vector_length)
+
+    num_tokens = T.dynamic('num_tokens')
 
     @T.prim_func
-    def kernel(
-        scores: T.Tensor((num_tokens, num_experts), T.float32),
-        topk_idx: T.Tensor((num_tokens, num_topk), T.int64),
+    def topk_gate_kernel_vmi(
+        scores: T.Tensor[(num_tokens, num_experts), T.float32],
+        topk_idx: T.Tensor[(num_tokens, num_topk), T.int64],
     ):
         with T.Kernel(num_vec_cores) as core_id:
-            scores_ub = T.alloc_shared((aligned_experts,), T.float32)
-            if num_groups > 1:
-                indices_ub = T.alloc_shared((aligned_experts,), T.int32)
-            out_ub = T.alloc_shared((aligned_topk_words,), T.int32)
+            scores_ub = T.alloc_shared((num_aligned_experts,), T.float32)
+            out_ub = T.alloc_shared((num_aligned_topk,), T.int32)
             topk_idx_view = T.view(topk_idx, (num_tokens, num_topk * 2), T.int32)
-            if num_groups == 1:
-                T.annotate_buffer_versions({scores_ub: num_stages, out_ub: num_stages})
-            else:
-                T.annotate_buffer_versions({scores_ub: num_stages, indices_ub: 1, out_ub: num_stages})
-
-            if num_groups > 1:
-                with T.SimdVF():
-                    for j in T.unroll(ceil_div(aligned_experts, logical_lanes), explicit=True):
-                        V.vstore(V.vci(T.int32(j * logical_lanes), size=logical_lanes), indices_ub[j * logical_lanes], stride=1, group=1)
-                    S.mem_bar("VST_VLD")
+            T.annotate_buffer_versions({scores_ub: num_stages, out_ub: num_stages})
 
             for w in T.Pipelined(
                 T.ceildiv(num_tokens, num_vec_cores),
                 num_stages=num_stages,
-                annotations={"multi_buffer_eligible": [scores_ub, out_ub]},
+                annotations={'multi_buffer_eligible': [scores_ub, out_ub]},
             ):
                 row = w * num_vec_cores + core_id
                 if row < num_tokens:
-                    T.copy(scores[row, :num_experts], scores_ub[:num_experts])
+                    T.copy(scores[row, :], scores_ub[:num_experts])
                     with T.SimdVF():
-                        full = V.create_mask(logical_lanes, size=logical_lanes)
-                        neg_inf = V.vbrc(-T.infinity(T.float32), size=logical_lanes)
-                        int_max = V.vbrc(T.max_value(T.int32), size=logical_lanes)
+                        full = V.create_mask(vector_length, size=vector_length)
+                        neg_inf = V.vbrc(-T.infinity(T.float32), size=vector_length)
+                        int_max = V.vbrc(T.max_value(T.int32), size=vector_length)
                         zero_1 = V.vbrc(T.int32(0), size=1)
-                        has_padding = num_experts != aligned_experts
-                        if has_padding or num_groups > 1:
-                            expert_limit = V.vbrc(T.int32(num_experts), size=logical_lanes)
-                        maximum = V.alloc_var(T.float32, size=logical_lanes)
-                        winner_vec = V.alloc_var(T.int32, size=logical_lanes)
+                        expert_limit = V.vbrc(T.int32(num_experts), size=vector_length)
+
+                        # Allocate vector register arrays for 6 vregs per group.
+                        scores_vec = V.alloc_local(
+                            (num_vregs_per_group,), T.vmi.vreg(vector_length, T.float32)
+                        )
+                        index_vec = V.alloc_local(
+                            (num_vregs_per_group,), T.vmi.vreg(vector_length, T.int32)
+                        )
+                        tmp_idx_vec = V.alloc_local(
+                            (num_vregs_per_group,), T.vmi.vreg(vector_length, T.int32)
+                        )
+
+                        acc_max = V.alloc_var(T.float32, size=vector_length)
+                        acc_min_idx = V.alloc_var(T.int32, size=vector_length)
                         if num_groups == 1:
-                            scores_vec = V.alloc_local((num_vregs_per_group,), T.vmi.vreg(logical_lanes, T.float32))
-                            index_vec = V.alloc_local((num_vregs_per_group,), T.vmi.vreg(logical_lanes, T.int32))
                             for i in T.unroll(num_vregs_per_group, explicit=True):
-                                scores_vec[i] = V.vload(scores_ub[i * logical_lanes], size=logical_lanes)
-                                index_vec[i] = V.vci(T.int32(i * logical_lanes), size=logical_lanes)
-                                if has_padding:
-                                    scores_vec[i] = V.vsel(V.vcmp(index_vec[i], expert_limit, full, "lt"), scores_vec[i], neg_inf)
+                                scores_vec[i] = V.vload(scores_ub[i * vector_length], size=vector_length)
+                                index_vec[i] = V.vci(T.int32(i * vector_length), size=vector_length)
+
+                            for i in T.unroll(num_vregs_per_group, explicit=True):
+                                scores_vec[i] = V.vsel(V.vcmp(index_vec[i], expert_limit, full, 'lt'), scores_vec[i], neg_inf)
+
                             for k in T.serial(num_topk):
-                                maximum = scores_vec[0]
+                                # Get max value.
+                                acc_max = scores_vec[0]
                                 for i in T.unroll(1, num_vregs_per_group, explicit=True):
-                                    maximum = V.vmax(maximum, scores_vec[i], full)
-                                maximum = V.vbrc(V.vcmax(maximum, full), size=logical_lanes)
-                                winner_vec = V.vsel(V.vcmp(scores_vec[0], maximum, full, "eq"), index_vec[0], int_max)
-                                for i in T.unroll(1, num_vregs_per_group, explicit=True):
-                                    candidates = V.vsel(V.vcmp(scores_vec[i], maximum, full, "eq"), index_vec[i], int_max)
-                                    winner_vec = V.vmin(candidates, winner_vec, full)
-                                winner_1 = V.vcmin(winner_vec, full)
-                                winner = V.vbrc(winner_1, size=logical_lanes)
-                                V.vstore(winner_1, out_ub[2 * k], stride=1, group=1)
-                                V.vstore(zero_1, out_ub[2 * k + 1], stride=1, group=1)
+                                    acc_max = V.vmax(acc_max, scores_vec[i], full)
+                                mx = V.vbrc(V.vcmax(acc_max, full), size=vector_length)
+
+                                # Get minimal idx for all values equal to max.
                                 for i in T.unroll(num_vregs_per_group, explicit=True):
-                                    scores_vec[i] = V.vsel(V.vcmp(index_vec[i], winner, full, "eq"), neg_inf, scores_vec[i])
-                        else:
-                            for k in T.serial(num_topk):
-                                maximum = neg_inf
-                                for group_id in T.serial(num_groups):
-                                    for i in T.unroll(num_vregs_per_group, explicit=True):
-                                        offset = group_id * experts_per_group + i * logical_lanes
-                                        indices = V.vload(indices_ub[offset], size=logical_lanes)
-                                        values = V.vsel(V.vcmp(indices, expert_limit, full, "lt"), V.vload(scores_ub[offset], size=logical_lanes), neg_inf)
-                                        maximum = V.vmax(maximum, values, full)
-                                maximum = V.vbrc(V.vcmax(maximum, full), size=logical_lanes)
-                                winner_vec = int_max
-                                for group_id in T.serial(num_groups):
-                                    for i in T.unroll(num_vregs_per_group, explicit=True):
-                                        offset = group_id * experts_per_group + i * logical_lanes
-                                        indices = V.vload(indices_ub[offset], size=logical_lanes)
-                                        values = V.vsel(V.vcmp(indices, expert_limit, full, "lt"), V.vload(scores_ub[offset], size=logical_lanes), neg_inf)
-                                        candidates = V.vsel(V.vcmp(values, maximum, full, "eq"), indices, int_max)
-                                        winner_vec = V.vmin(candidates, winner_vec, full)
-                                winner_1 = V.vcmin(winner_vec, full)
-                                winner = V.vbrc(winner_1, size=logical_lanes)
+                                    tmp_idx_vec[i] = V.vsel(V.vcmp(scores_vec[i], mx, full, 'eq'), index_vec[i], int_max)
+                                acc_min_idx = tmp_idx_vec[0]
+                                for i in T.unroll(1, num_vregs_per_group, explicit=True):
+                                    acc_min_idx = V.vmin(acc_min_idx, tmp_idx_vec[i], full)
+                                winner_1 = V.vcmin(acc_min_idx, full)
+                                idx = V.vbrc(winner_1, size=vector_length)
                                 V.vstore(winner_1, out_ub[2 * k], stride=1, group=1)
                                 V.vstore(zero_1, out_ub[2 * k + 1], stride=1, group=1)
+
+                                # Mask out the winner lane in each vreg so the next k picks the next best.
+                                for i in T.unroll(num_vregs_per_group, explicit=True):
+                                    scores_vec[i] = V.vsel(V.vcmp(index_vec[i], idx, full, 'eq'), neg_inf, scores_vec[i])
+                        else:
+                            # Slow path: multi-group.
+                            for k in T.serial(num_topk):
+                                # Phase 1: per-group local max -> accumulated global max.
+                                acc_max = neg_inf
                                 for group_id in T.serial(num_groups):
                                     for i in T.unroll(num_vregs_per_group, explicit=True):
-                                        offset = group_id * experts_per_group + i * logical_lanes
-                                        indices = V.vload(indices_ub[offset], size=logical_lanes)
-                                        values = V.vsel(V.vcmp(indices, winner, full, "eq"), neg_inf, V.vload(scores_ub[offset], size=logical_lanes))
-                                        V.vstore(values, scores_ub[offset], stride=1, group=1)
-                                S.mem_bar("VST_VLD")
+                                        offset = group_id * experts_per_group + i * vector_length
+                                        index_vec[i] = V.vci(T.int32(offset), size=vector_length)
+                                        scores_vec[i] = V.vsel(
+                                            V.vcmp(index_vec[i], expert_limit, full, 'lt'),
+                                            V.vload(scores_ub[offset], size=vector_length),
+                                            neg_inf,
+                                        )
+                                    for i in T.unroll(num_vregs_per_group, explicit=True):
+                                        acc_max = V.vmax(acc_max, scores_vec[i], full)
+                                mx = V.vbrc(V.vcmax(acc_max, full), size=vector_length)
+
+                                # Phase 2: per-group winner index -> accumulated global index.
+                                acc_min_idx = int_max
+                                for group_id in T.serial(num_groups):
+                                    for i in T.unroll(num_vregs_per_group, explicit=True):
+                                        offset = group_id * experts_per_group + i * vector_length
+                                        index_vec[i] = V.vci(T.int32(offset), size=vector_length)
+                                        scores_vec[i] = V.vsel(
+                                            V.vcmp(index_vec[i], expert_limit, full, 'lt'),
+                                            V.vload(scores_ub[offset], size=vector_length),
+                                            neg_inf,
+                                        )
+                                        tmp_idx_vec[i] = V.vsel(
+                                            V.vcmp(scores_vec[i], mx, full, 'eq'), index_vec[i], int_max
+                                        )
+                                    for i in T.unroll(num_vregs_per_group, explicit=True):
+                                        acc_min_idx = V.vmin(acc_min_idx, tmp_idx_vec[i], full)
+                                winner_1 = V.vcmin(acc_min_idx, full)
+                                idx = V.vbrc(winner_1, size=vector_length)
+                                V.vstore(winner_1, out_ub[2 * k], stride=1, group=1)
+                                V.vstore(zero_1, out_ub[2 * k + 1], stride=1, group=1)
+
+                                # Phase 3: mask the winner's lane to -inf in UB.
+                                for group_id in T.serial(num_groups):
+                                    for i in T.unroll(num_vregs_per_group, explicit=True):
+                                        offset = group_id * experts_per_group + i * vector_length
+                                        index_vec[i] = V.vci(T.int32(offset), size=vector_length)
+                                        scores_vec[i] = V.vsel(
+                                            V.vcmp(index_vec[i], idx, full, 'eq'),
+                                            neg_inf,
+                                            V.vload(scores_ub[offset], size=vector_length),
+                                        )
+                                        V.vstore(scores_vec[i], scores_ub[offset], stride=1, group=1)
+                                S.mem_bar('VST_VLD')
                     T.copy(out_ub[: num_topk * 2], topk_idx_view[row, :])
 
-    return kernel
+    return topk_gate_kernel_vmi
