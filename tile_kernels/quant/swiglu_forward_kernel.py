@@ -46,9 +46,9 @@ def swiglu_forward_and_per_token_cast_impl(
 
     # Get kernel implement
     if is_ascend():
-        from tile_kernels.quant.swiglu_forward_asc import get_swiglu_forward_kernel_asc
+        from tile_kernels.quant.swiglu_forward_vmi import get_swiglu_forward_kernel_vmi
 
-        kernel = get_swiglu_forward_kernel_asc(
+        kernel = get_swiglu_forward_kernel_vmi(
             hidden,
             num_experts,
             get_token_alignment(),

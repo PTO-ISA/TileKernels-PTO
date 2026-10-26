@@ -1,0 +1,31 @@
+diff --git a/ptodsl/ptodsl/_ops_simt.py b/ptodsl/ptodsl/_ops_simt.py
+index 410e7616b..a57bc9199 100644
+--- a/ptodsl/ptodsl/_ops_simt.py
++++ b/ptodsl/ptodsl/_ops_simt.py
+@@ -398,14 +398,23 @@ def _atomic_binary(op_cls, ptr, value, *, l2cache, signedness, context: str):
+     elem_type = _pointer_element_type(raw_ptr, context=context)
+     _validate_integer_signedness_only(elem_type, signedness, context=context)
+     raw_value = coerce_scalar_to_type(value, elem_type, context=context)
++    # Scalar atomics use signless common IR even when authored with si/ui types.
++    # Keep both the pointer and the value in the same storage type.
++    if IntegerType.isinstance(elem_type) and not elem_type.is_signless:
++        common_type = IntegerType.get_signless(elem_type.width)
++        ptr_type = _pto.PtrType(raw_ptr.type)
++        common_ptr_type = _pto.PtrType.get(common_type, memory_space=ptr_type.memory_space)
++        raw_ptr = _pto.CastPtrOp(common_ptr_type, raw_ptr).result
++        raw_value = coerce_runtime_integer_value(raw_value, common_type, context=context)
+     kwargs = {"l2cache": _st_l2_cache_attr(l2cache, context=f"{context} l2cache")}
+     if signedness is not None:
+         kwargs["signedness"] = _optional_signedness_attr(
+             signedness, context=f"{context} signedness"
+         )
+-    return wrap_surface_value(
+-        op_cls(raw_value.type, raw_ptr, raw_value, **kwargs).old
+-    )
++    old = op_cls(raw_value.type, raw_ptr, raw_value, **kwargs).old
++    if IntegerType.isinstance(elem_type) and old.type != elem_type:
++        old = coerce_runtime_integer_value(old, elem_type, context=context)
++    return wrap_surface_value(old)
+ 
+ 
+ def atomic_exch(ptr, value, *, l2cache="nmfv"):
