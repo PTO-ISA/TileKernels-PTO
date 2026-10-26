@@ -4,7 +4,7 @@ from tilelang.ascend.language import simd as S
 from tilelang.ascend.language import vmi as V
 
 from tile_kernels.config import get_num_vec_cores
-from tile_kernels.moe.sqrt_softplus import sqrt_softplus_backward_vmi, sqrt_softplus_backward_vmi_dense
+from tile_kernels.moe.sqrt_softplus import sqrt_softplus_backward_vmi
 from tile_kernels.utils import align
 
 
@@ -96,8 +96,9 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
                     idx_offsets = V.vinterpret_cast(V.vadd(V.vmul(local_row, V.vbrc(T.int32(idx_stride), size=vector_length), full), V.vmuls(local_k, T.int32(2), full), full), 'uint32')
                     weight_offsets = V.vinterpret_cast(V.vadd(V.vmul(local_row, V.vbrc(T.int32(weight_stride), size=vector_length), full), local_k, full), 'uint32')
                     score_row_offsets = V.vmul(local_row, V.vbrc(T.int32(num_aligned_experts), size=vector_length), full)
-                    for j in T.serial(tile_rows * num_vregs):
-                        V.vstore(zero, grad_ub[0, j * vector_length])
+                    for row in T.serial(tile_rows):
+                        for j in T.serial(num_vregs):
+                            V.vstore(zero, grad_ub[row, j * vector_length])
                     S.mem_bar('VST_VST')
 
                     for row_base in T.serial(0, tile_rows, rows_per_vec):
@@ -105,8 +106,7 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
                         topk_lanes = V.vcmps(local_k, T.int32(num_topk), valid_rows, 'lt')
                         idx = V.vgather(idx_ub[row_base, 0], idx_offsets, topk_lanes)
                         valid_topk = V.vcmps(idx, T.int32(0), topk_lanes, 'ge')
-                        score_row_offsets_u = V.vinterpret_cast(score_row_offsets, 'uint32')
-                        score_offsets = V.vadd(score_row_offsets_u, V.vinterpret_cast(idx, 'uint32'), full)
+                        score_offsets = V.vadd(V.vinterpret_cast(score_row_offsets, 'uint32'), V.vinterpret_cast(idx, 'uint32'), full)
                         chosen_scores = V.vgather(scores_ub[row_base, 0], score_offsets, valid_topk)
                         weights = V.vgather(weight_ub[row_base, 0], weight_offsets, valid_topk)
                         grad_weights = V.vgather(grad_weight_ub[row_base, 0], weight_offsets, valid_topk)
@@ -120,8 +120,7 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
                             dot = V.vadd(dot, V.vselr(dot, partner), full)
                         # For w_i = scale*s_i/sum(s), dL/ds_i = (scale*g_i - sum(w*g))/sum(s).
                         numerator = V.vsub(V.vmuls(grad_weights, T.float32(routed_scaling_factor), valid_topk), dot, valid_topk)
-                        denominator = V.vadds(denom, T.float32(1e-20), full)
-                        delta = V.vdiv(numerator, denominator, valid_topk, precision='ftz_true')
+                        delta = V.vdiv(numerator, V.vadds(denom, T.float32(1e-20), full), valid_topk, precision='ftz_true')
 
                         # Fixed routing may repeat experts; sum their gradients before a single scatter write.
                         combined = V.alloc_var(T.float32, size=vector_length)
@@ -155,24 +154,22 @@ def get_moe_topk_gate_backward_kernel_vmi(num_topk: int, num_routed_experts: int
                                 score = V.vload(scores_ub[row, j * vector_length], size=vector_length)
                                 aux_grad = V.vload(aux_grad_ub[hrow, j * vector_length], size=vector_length)
                                 if not experts_aligned:
-                                    valid = V.vcmp(V.vadd(lanes, V.vbrc(T.int32(j * vector_length), size=vector_length), full), V.vbrc(T.int32(num_routed_experts), size=vector_length), full, 'lt')
+                                    valid = V.vcmps(V.vci(j * vector_length, size=vector_length), T.int32(num_routed_experts), full, 'lt')
                                     score = V.vsel(valid, score, zero)
                                     aux_grad = V.vsel(valid, aux_grad, zero)
                                 score_sum = V.vadd(score_sum, score, full)
                                 aux_dot = V.vadd(aux_dot, V.vmul(aux_grad, score, full), full)
-                            # PTOAS currently supports only reassociated VMI reductions.
                             score_sum_scalar = V.vcadd(score_sum, full, reassoc=True)
                             aux_dot_scalar = V.vcadd(aux_dot, full, reassoc=True)
                             inv_score_sum = V.vdiv(one, V.vbrc(score_sum_scalar, size=vector_length), full, precision='ftz_true')
-                            aux_active = V.vbrc(T.cast(mask_ub[row], T.int32), size=vector_length)
-                            aux_active = V.vcmp(aux_active, V.vbrc(T.int32(0), size=vector_length), full, 'ne')
+                            aux_active = V.vcmps(V.vbrc(T.cast(mask_ub[row], T.int32), size=vector_length), T.int32(0), full, 'ne')
                             inv_score_sum = V.vsel(aux_active, inv_score_sum, zero)
                             aux_bias = V.vneg(V.vmul(V.vmul(V.vbrc(aux_dot_scalar, size=vector_length), inv_score_sum, full), inv_score_sum, full), full)
                             for j in T.serial(num_vregs):
                                 score = V.vload(scores_ub[row, j * vector_length], size=vector_length)
                                 aux_grad = V.vload(aux_grad_ub[hrow, j * vector_length], size=vector_length)
                                 grad_score = V.vadd(V.vload(grad_ub[row, j * vector_length], size=vector_length), V.vadd(V.vmul(aux_grad, inv_score_sum, full), aux_bias, full), full)
-                                grad_logit = V.vmul(grad_score, sqrt_softplus_backward_vmi_dense(score, full, vector_length), full)
+                                grad_logit = V.vmul(grad_score, sqrt_softplus_backward_vmi(score, full, vector_length), full)
                                 V.vstore(grad_logit, grad_ub[row, j * vector_length])
 
                 T.copy(grad_ub[:num_rows, :num_routed_experts], grad_logits[row_start : row_start + num_rows, :])
