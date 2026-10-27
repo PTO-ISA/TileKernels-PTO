@@ -18,8 +18,8 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
     num_groups = ceil_div(num_experts, experts_per_group)
     num_aligned_experts = num_groups * experts_per_group
 
-    # Each int64 output index is represented by two int32 words in UB.
-    num_aligned_topk = align(num_topk * 2, vector_length)
+    # Round up to a multiple of vector_length for UB alignment of the index output.
+    num_aligned_topk = align(num_topk, vector_length)
 
     num_tokens = T.dynamic('num_tokens')
 
@@ -31,8 +31,12 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
         with T.Kernel(num_vec_cores) as core_id:
             scores_ub = T.alloc_shared((num_aligned_experts,), T.float32)
             out_ub = T.alloc_shared((num_aligned_topk,), T.int32)
+            invalid_logits_ub = T.alloc_shared((vector_length,), T.int32)
             topk_idx_view = T.view(topk_idx, (num_tokens, num_topk * 2), T.int32)
-            T.annotate_buffer_versions({scores_ub: num_stages, out_ub: num_stages})
+            T.annotate_buffer_versions({scores_ub: num_stages, out_ub: num_stages, invalid_logits_ub: 1})
+
+            with T.SimdVF():
+                V.vstore(V.vbrc(T.int32(0), size=vector_length), invalid_logits_ub[0])
 
             for w in T.Pipelined(
                 T.ceildiv(num_tokens, num_vec_cores),
@@ -62,6 +66,24 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
 
                         acc_max = V.alloc_var(T.float32, size=vector_length)
                         acc_min_idx = V.alloc_var(T.int32, size=vector_length)
+
+                        zero = V.vbrc(T.float32(0.0), size=vector_length)
+                        zeros = V.vbrc(T.int32(0), size=vector_length)
+                        ones = V.vbrc(T.int32(1), size=vector_length)
+                        invalid = V.alloc_var(T.int32, size=vector_length)
+                        invalid = V.vload(invalid_logits_ub[0], size=vector_length)
+                        for j in T.unroll(ceil_div(num_experts, vector_length), explicit=True):
+                            valid = V.vcmps(
+                                V.vci(j * vector_length, size=vector_length),
+                                T.int32(num_experts),
+                                full,
+                                'lt',
+                            )
+                            logit = V.vsel(valid, V.vload(scores_ub[j * vector_length], size=vector_length), zero)
+                            nonfinite = V.vcmps(V.vsub(logit, logit), T.float32(0.0), full, 'ne')
+                            invalid = V.vmax(invalid, V.vsel(nonfinite, ones, zeros), full)
+                        V.vstore(V.vcmax(invalid, full), invalid_logits_ub[0], stride=1, group=1)
+
                         if num_groups == 1:
                             for i in T.unroll(num_vregs_per_group, explicit=True):
                                 scores_vec[i] = V.vload(scores_ub[i * vector_length], size=vector_length)
@@ -143,5 +165,7 @@ def get_topk_gate_kernel_vmi(num_experts: int, num_topk: int, num_vec_cores: int
                                         V.vstore(scores_vec[i], scores_ub[offset], stride=1, group=1)
                                 S.mem_bar('VST_VLD')
                     T.copy(out_ub[: num_topk * 2], topk_idx_view[row, :])
+
+            T.device_assert(invalid_logits_ub[0] == 0, msg='topk_gate input contains nan or inf!')
 
     return topk_gate_kernel_vmi
