@@ -4,11 +4,10 @@ from tilelang.ascend.language import vmi as V
 
 
 def _row_max(mat, mask_lo, mask_hi):
-    """Broadcast row max: masked grouped vcmax x2 + group-8 vbrc + vsel (ASC structure).
+    """Broadcast row max: every lane receives the max of its 4-lane row.
 
-    Mirrors the ASC vcgmax/vselr/vsel sequence: each 8-lane group holds two
-    4-lane rows; vcmax with the half-group mask reduces each row, vbrc(group=8)
-    broadcasts the compact result inside its group, and vsel picks per lane.
+    Math: ``row_max(mat)[l] = max{ mat[l'] : l' in row(l) }`` where ``row(l)``
+    is the block of 4 contiguous lanes (one 4x4 matrix row) holding ``l``.
     """
     lo = V.vbrc(V.vcmax(mat, mask_lo, group=8), size=64, group=8)
     hi = V.vbrc(V.vcmax(mat, mask_hi, group=8), size=64, group=8)
@@ -16,10 +15,12 @@ def _row_max(mat, mask_lo, mask_hi):
 
 
 def _row_reduce(mat, mask_lo, mask_hi):
-    """Broadcast row sum: masked grouped vcadd x2 + group-8 vbrc + vsel (ASC structure).
+    """Broadcast row sum: every lane receives the sum of its 4-lane row.
 
-    ``reassoc=True`` keeps the ASC ``vcgadd`` two-pair fold order
-    ((a+b)+(c+d) per 4-lane row), so every fp32 rounding step matches.
+    Math: ``row_sum(mat)[l] = sum{ mat[l'] : l' in row(l) }`` over the 4
+    contiguous lanes of ``l``'s row, folded as the two-pair tree
+    ``(a+b)+(c+d)``: ``reassoc=True`` pins exactly this association, so the
+    fp32 rounding sequence is fixed independent of the lowering.
     """
     lo = V.vbrc(V.vcadd(mat, mask_lo, group=8, reassoc=True), size=64, group=8)
     hi = V.vbrc(V.vcadd(mat, mask_hi, group=8, reassoc=True), size=64, group=8)
