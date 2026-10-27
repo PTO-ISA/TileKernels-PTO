@@ -50,8 +50,7 @@ def mhc_sinkhorn_fwd_vmi(
     """SimdVF forward: 4 tokens packed per VR (64 fp32 = 4 x 4x4).
 
     Layout per VR: 4 tokens x 16 elements = 64 fp32, ``lane = 16*t + 4*r + c``.
-    Row/col sums and maxes are two-round vselr/vadd / vselr/vmax trees over
-    each row's 4 contiguous lanes; the 4x4 transpose is a vselr by t_idx.
+    Each 8-lane group spans 2 rows of the same token.
     """
     num_tokens = T.dynamic('num_tokens')
     hidden_size = T.const('hidden_size')
@@ -92,13 +91,8 @@ def mhc_sinkhorn_fwd_vmi(
                 col4 = V.vshls(col, T.int32(2), mask_full)
                 t_idx = V.vadd(V.vadd(token_base_tidx, col4), V.vshrs(local, T.int32(2), mask_full))
 
-                # Half-group masks for the grouped row reductions: mask_lo keeps
-                # the first 4 lanes of each 8-lane group (the ASC per-VLane
-                # [1,1,1,1,0,0,0,0] pattern, built like the ASC original).
-                const_7 = V.vbrc(T.int32(7), size=64)
-                mod8 = V.vand(idx, const_7)
-                mask_lo = V.vcmps(mod8, T.int32(4), mask_full, 'lt')
-                mask_hi = V.vcmps(mod8, T.int32(4), mask_full, 'ge')
+                mask_lo = V.create_mask(4, size=64, group=8)
+                mask_hi = V.vnot(mask_lo)
                 eps_b = V.vbrc(T.float32(eps), size=64)
 
                 # Load 4 tokens x 16 elements = 64 fp32
@@ -204,10 +198,8 @@ def mhc_sinkhorn_bwd_vmi(
                 col = V.vand(idx, V.vbrc(T.int32(3), size=64))
                 col4 = V.vshls(col, T.int32(2), mask_full)
                 t_idx = V.vadd(V.vadd(token_base_tidx, col4), V.vshrs(local, T.int32(2), mask_full))
-                const_7 = V.vbrc(T.int32(7), size=64)
-                mod8 = V.vand(idx, const_7)
-                mask_lo = V.vcmps(mod8, T.int32(4), mask_full, 'lt')
-                mask_hi = V.vcmps(mod8, T.int32(4), mask_full, 'ge')
+                mask_lo = V.create_mask(4, size=64, group=8)
+                mask_hi = V.vnot(mask_lo)
                 eps_b = V.vbrc(T.float32(eps), size=64)
 
                 # VR1 starts at token 4 (4 tokens per VR)
