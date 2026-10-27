@@ -195,7 +195,7 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
         else:
             cast_back = T.vmi.vcvt(T.vmi.vcvt(clamp_e4m3(scaled) if out_config.use_e4m3_sf else scaled, 'float8_e4m3fn', rounding='R', saturate='SAT'), 'float32')
             if use_bf16_dequant:
-                cast_back = T.vmi.vcvt(cast_back, 'bfloat16')
+                cast_back = T.vmi.vcvt(cast_back, 'bfloat16', rounding='Z', saturate='NOSAT')
         return T.vmi.vmul(cast_back, sf, mask)
 
     @T.macro
@@ -208,8 +208,8 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
         else:
             scaled_f = T.vmi.vcvt(scaled, 'float32')
             quantized = T.vmi.vcvt(scaled_f, 'float8_e4m3fn', rounding='R', saturate='SAT')
-            rescaled = T.vmi.vmul(T.vmi.vcvt(quantized, 'float32'), T.vmi.vcvt(sf, 'float32'))
-        return T.vmi.vcvt(rescaled, 'bfloat16')
+            recovered = T.vmi.vcvt(T.vmi.vcvt(quantized, 'float32'), 'bfloat16', rounding='Z', saturate='NOSAT')
+            return T.vmi.vmul(recovered, sf)
 
     @T.macro
     def cast_and_cast_back(x_ub, out_ub, row, col, sf, sf_inv, lanes=VL):
