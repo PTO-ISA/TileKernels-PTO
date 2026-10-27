@@ -56,7 +56,7 @@ def get_norm_backward_kernel_vmi(
             mask128 = V.create_mask(128, size=128)
             mask1 = V.create_mask(1, size=1)
             # g = dy * out_scale * weight; dX = (g - xhat * mean(xhat * g)) * rstd.
-            for row in T.serial(num_rows):
+            for row in T.serial(T.int16(num_rows)):
                 rstd_value = V.vbrc(V.vload(rstd_ub[row], size=1), size=128, group=1)
                 total = V.alloc_var(T.float32, size=128)
                 total = V.vbrc(T.float32(0.0), size=128)
@@ -76,7 +76,7 @@ def get_norm_backward_kernel_vmi(
                 if with_weight:
                     w = load_f32(weight_ub, col, 128)
                     dw = load_f32(weight_grad_ub, col, 128)
-                for row in T.serial(num_rows):
+                for row in T.serial(T.int16(num_rows)):
                     inv_rms = V.vbrc(V.vload(rstd_ub[row], size=1), size=128, group=1)
                     mean = V.vbrc(V.vload(mean_ub[row], size=1), size=128, group=1)
                     x = load_f32(x_ub, row * hidden + col, 128)
