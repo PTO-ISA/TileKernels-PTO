@@ -3,33 +3,38 @@ from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
 
 
-def _row_max(mat, pair_swap_idx, cross_pair_idx):
-    """Broadcast row max (ASC: vcgmax x2 + vselr x2 + vsel), as a vselr/vmax tree."""
-    pair = V.vmax(mat, V.vselr(mat, pair_swap_idx))  # max over each 2-lane pair
-    return V.vmax(pair, V.vselr(pair, cross_pair_idx))  # max over the 4-lane row
+def _row_max(mat, mask_lo, mask_hi):
+    """Broadcast row max: masked grouped vcmax x2 + group-8 vbrc + vsel (ASC structure).
 
-
-def _row_reduce(mat, pair_swap_idx, cross_pair_idx):
-    """Broadcast row sum (ASC: vcgadd x2 + vselr x2 + vsel), as a pairwise vselr/vadd tree.
-
-    Lane l first sums with its 2-lane pair partner (``vselr`` by ``lane ^ 1``),
-    then adds the opposite pair's partial: ``(a+b)+(c+d)`` at every lane.
-    This is exactly the ASC ``vcgadd`` fold order (verified bitwise against a
-    dumped ASC stage), so every fp32 rounding step matches.
+    Mirrors the ASC vcgmax/vselr/vsel sequence: each 8-lane group holds two
+    4-lane rows; vcmax with the half-group mask reduces each row, vbrc(group=8)
+    broadcasts the compact result inside its group, and vsel picks per lane.
     """
-    pair = V.vadd(mat, V.vselr(mat, pair_swap_idx))  # (a+b) / (c+d) per pair
-    return V.vadd(pair, V.vselr(pair, cross_pair_idx))  # (a+b)+(c+d)
+    lo = V.vbrc(V.vcmax(mat, mask_lo, group=8), size=64, group=8)
+    hi = V.vbrc(V.vcmax(mat, mask_hi, group=8), size=64, group=8)
+    return V.vsel(mask_lo, lo, hi)
 
 
-def _col_reduce(mat, t_idx, pair_swap_idx, cross_pair_idx):
-    """Col reduce: transpose, row-reduce -> (transposed, broadcast col sum).
+def _row_reduce(mat, mask_lo, mask_hi):
+    """Broadcast row sum: masked grouped vcadd x2 + group-8 vbrc + vsel (ASC structure).
+
+    ``reassoc=True`` keeps the ASC ``vcgadd`` two-pair fold order
+    ((a+b)+(c+d) per 4-lane row), so every fp32 rounding step matches.
+    """
+    lo = V.vbrc(V.vcadd(mat, mask_lo, group=8, reassoc=True), size=64, group=8)
+    hi = V.vbrc(V.vcadd(mat, mask_hi, group=8, reassoc=True), size=64, group=8)
+    return V.vsel(mask_lo, lo, hi)
+
+
+def _col_reduce(mat, mask_lo, mask_hi, t_idx):
+    """Col reduce: transpose, row reduce -> (transposed, broadcast col sum).
 
     NOTE: The returned broadcast col sum is in TRANSPOSED layout (each lane
     gets its transposed-row sum = original-col sum). To use with original-layout
     data, transpose the broadcast result back via V.vselr(csum_b, t_idx).
     """
     tr = V.vselr(mat, t_idx)
-    return tr, _row_reduce(tr, pair_swap_idx, cross_pair_idx)
+    return tr, _row_reduce(tr, mask_lo, mask_hi)
 
 
 @tilelang.jit(target='pto')
@@ -86,28 +91,28 @@ def mhc_sinkhorn_fwd_vmi(
                 col4 = V.vshls(col, T.int32(2), mask_full)
                 t_idx = V.vadd(V.vadd(token_base_tidx, col4), V.vshrs(local, T.int32(2), mask_full))
 
-                # Row-reduction tree indices: pair_swap_idx flips the low bit
-                # (partner in the same 2-lane pair); cross_pair_idx points at
-                # the same-parity lane of the row's other pair.
-                one = V.vbrc(T.int32(1), size=64)
-                two = V.vbrc(T.int32(2), size=64)
-                pair_swap_idx = V.vxor(idx, one)
-                cross_pair_idx = V.vxor(idx, two)
+                # Half-group masks for the grouped row reductions: mask_lo keeps
+                # the first 4 lanes of each 8-lane group (the ASC per-VLane
+                # [1,1,1,1,0,0,0,0] pattern, built like the ASC original).
+                const_7 = V.vbrc(T.int32(7), size=64)
+                mod8 = V.vand(idx, const_7)
+                mask_lo = V.vcmps(mod8, T.int32(4), mask_full, 'lt')
+                mask_hi = V.vcmps(mod8, T.int32(4), mask_full, 'ge')
                 eps_b = V.vbrc(T.float32(eps), size=64)
 
                 # Load 4 tokens x 16 elements = 64 fp32
                 mat_0 = V.vload(comb_in_ub[0, 0, 0], size=64)
 
                 # Step 1: Row softmax + eps
-                rmax_b_0 = _row_max(mat_0, pair_swap_idx, cross_pair_idx)
+                rmax_b_0 = _row_max(mat_0, mask_lo, mask_hi)
                 mat_1 = V.vexpdif(mat_0, rmax_b_0, mask_full)
-                rsum_b_0 = _row_reduce(mat_1, pair_swap_idx, cross_pair_idx)
+                rsum_b_0 = _row_reduce(mat_1, mask_lo, mask_hi)
                 mat_2 = V.vdiv(mat_1, rsum_b_0, mask_full, precision='exact')
                 mat_3 = V.vadd(mat_2, eps_b)
 
                 # Step 2: Col normalize (transpose, reduce, normalize, transpose back)
                 tr_0 = V.vselr(mat_3, t_idx)
-                csum_b_0 = _row_reduce(tr_0, pair_swap_idx, cross_pair_idx)
+                csum_b_0 = _row_reduce(tr_0, mask_lo, mask_hi)
                 tr_1 = V.vdiv(tr_0, V.vadd(csum_b_0, eps_b), mask_full, precision='exact')
                 mat_4 = V.vselr(tr_1, t_idx)
 
@@ -118,11 +123,11 @@ def mhc_sinkhorn_fwd_vmi(
                 cur = V.alloc_var(T.float32, size=64)
                 cur = mat_4
                 for _step in range(repeat - 1):
-                    rsum_b = _row_reduce(cur, pair_swap_idx, cross_pair_idx)
+                    rsum_b = _row_reduce(cur, mask_lo, mask_hi)
                     cur = V.vdiv(cur, V.vadd(rsum_b, eps_b), mask_full, precision='exact')
 
                     tr = V.vselr(cur, t_idx)
-                    csum_b = _row_reduce(tr, pair_swap_idx, cross_pair_idx)
+                    csum_b = _row_reduce(tr, mask_lo, mask_hi)
                     tr = V.vdiv(tr, V.vadd(csum_b, eps_b), mask_full, precision='exact')
                     cur = V.vselr(tr, t_idx)
 
@@ -198,10 +203,10 @@ def mhc_sinkhorn_bwd_vmi(
                 col = V.vand(idx, V.vbrc(T.int32(3), size=64))
                 col4 = V.vshls(col, T.int32(2), mask_full)
                 t_idx = V.vadd(V.vadd(token_base_tidx, col4), V.vshrs(local, T.int32(2), mask_full))
-                one = V.vbrc(T.int32(1), size=64)
-                two = V.vbrc(T.int32(2), size=64)
-                pair_swap_idx = V.vxor(idx, one)
-                cross_pair_idx = V.vxor(idx, two)
+                const_7 = V.vbrc(T.int32(7), size=64)
+                mod8 = V.vand(idx, const_7)
+                mask_lo = V.vcmps(mod8, T.int32(4), mask_full, 'lt')
+                mask_hi = V.vcmps(mod8, T.int32(4), mask_full, 'ge')
                 eps_b = V.vbrc(T.float32(eps), size=64)
 
                 # VR1 starts at token 4 (4 tokens per VR)
@@ -213,14 +218,14 @@ def mhc_sinkhorn_bwd_vmi(
                 x1_0 = V.vload(x_ub[vr1_tok, 0, 0], size=64)  # VR1: tokens 4-7
 
                 # Softmax + eps
-                rmax0_b = _row_max(x0_0, pair_swap_idx, cross_pair_idx)
-                rmax1_b = _row_max(x1_0, pair_swap_idx, cross_pair_idx)
+                rmax0_b = _row_max(x0_0, mask_lo, mask_hi)
+                rmax1_b = _row_max(x1_0, mask_lo, mask_hi)
                 x0_1 = V.alloc_var(T.float32, size=64)
                 x1_1 = V.alloc_var(T.float32, size=64)
                 x0_1 = V.vexpdif(x0_0, rmax0_b, mask_full)
                 x1_1 = V.vexpdif(x1_0, rmax1_b, mask_full)
-                rsum0_b = _row_reduce(x0_1, pair_swap_idx, cross_pair_idx)
-                rsum1_b = _row_reduce(x1_1, pair_swap_idx, cross_pair_idx)
+                rsum0_b = _row_reduce(x0_1, mask_lo, mask_hi)
+                rsum1_b = _row_reduce(x1_1, mask_lo, mask_hi)
                 x0_2 = V.vdiv(x0_1, rsum0_b, mask_full, precision='exact')
                 x1_2 = V.vdiv(x1_1, rsum1_b, mask_full, precision='exact')
                 x0_3 = V.vadd(x0_2, eps_b)
@@ -234,8 +239,8 @@ def mhc_sinkhorn_bwd_vmi(
                 V.vstore(x1_3, xs_ub[1, vr1_tok, 0, 0])
 
                 # First col normalize
-                tr0_0, csum0_b = _col_reduce(x0_3, t_idx, pair_swap_idx, cross_pair_idx)
-                tr1_0, csum1_b = _col_reduce(x1_3, t_idx, pair_swap_idx, cross_pair_idx)
+                tr0_0, csum0_b = _col_reduce(x0_3, mask_lo, mask_hi, t_idx)
+                tr1_0, csum1_b = _col_reduce(x1_3, mask_lo, mask_hi, t_idx)
                 # Save sums[1] = col_sum (transpose back to original layout for bwd)
                 csum0_b_t = V.vselr(csum0_b, t_idx)
                 csum1_b_t = V.vselr(csum1_b, t_idx)
@@ -258,8 +263,8 @@ def mhc_sinkhorn_bwd_vmi(
                     s_col = (step + 1) * 2 + 1
 
                     # Row normalize
-                    rsum0_b = _row_reduce(cur0, pair_swap_idx, cross_pair_idx)
-                    rsum1_b = _row_reduce(cur1, pair_swap_idx, cross_pair_idx)
+                    rsum0_b = _row_reduce(cur0, mask_lo, mask_hi)
+                    rsum1_b = _row_reduce(cur1, mask_lo, mask_hi)
                     V.vstore(rsum0_b, sums_ub[s_row, 0, 0, 0])
                     V.vstore(rsum1_b, sums_ub[s_row, vr1_tok, 0, 0])
                     V.vstore(cur0, xs_ub[s_row, 0, 0, 0])
@@ -268,8 +273,8 @@ def mhc_sinkhorn_bwd_vmi(
                     cur1 = V.vdiv(cur1, V.vadd(rsum1_b, eps_b), mask_full, precision='exact')
 
                     # Col normalize
-                    tr0, csum0_b = _col_reduce(cur0, t_idx, pair_swap_idx, cross_pair_idx)
-                    tr1, csum1_b = _col_reduce(cur1, t_idx, pair_swap_idx, cross_pair_idx)
+                    tr0, csum0_b = _col_reduce(cur0, mask_lo, mask_hi, t_idx)
+                    tr1, csum1_b = _col_reduce(cur1, mask_lo, mask_hi, t_idx)
                     csum0_b_t = V.vselr(csum0_b, t_idx)
                     csum1_b_t = V.vselr(csum1_b, t_idx)
                     V.vstore(csum0_b_t, sums_ub[s_col, 0, 0, 0])
@@ -307,8 +312,8 @@ def mhc_sinkhorn_bwd_vmi(
                         # grad = (grad - col_sum2) / (sum + eps)
                         temp0 = V.vmul(g0, xi0)
                         temp1 = V.vmul(g1, xi1)
-                        _, cs2_0_b = _col_reduce(temp0, t_idx, pair_swap_idx, cross_pair_idx)
-                        _, cs2_1_b = _col_reduce(temp1, t_idx, pair_swap_idx, cross_pair_idx)
+                        _, cs2_0_b = _col_reduce(temp0, mask_lo, mask_hi, t_idx)
+                        _, cs2_1_b = _col_reduce(temp1, mask_lo, mask_hi, t_idx)
                         # cs2 is in transposed layout -- transpose back to original
                         cs2_0_b = V.vselr(cs2_0_b, t_idx)
                         cs2_1_b = V.vselr(cs2_1_b, t_idx)
@@ -324,8 +329,8 @@ def mhc_sinkhorn_bwd_vmi(
                         # grad = (grad - row_sum2) / (sum + eps)
                         temp0 = V.vmul(g0, xi0)
                         temp1 = V.vmul(g1, xi1)
-                        rs2_0_b = _row_reduce(temp0, pair_swap_idx, cross_pair_idx)
-                        rs2_1_b = _row_reduce(temp1, pair_swap_idx, cross_pair_idx)
+                        rs2_0_b = _row_reduce(temp0, mask_lo, mask_hi)
+                        rs2_1_b = _row_reduce(temp1, mask_lo, mask_hi)
                         rs2_0_b = V.vdiv(rs2_0_b, V.vadd(sm0, eps_b), mask_full, precision='exact')
                         rs2_1_b = V.vdiv(rs2_1_b, V.vadd(sm1, eps_b), mask_full, precision='exact')
                         g0 = V.vdiv(V.vsub(g0, rs2_0_b), V.vadd(sm0, eps_b), mask_full, precision='exact')
@@ -336,8 +341,8 @@ def mhc_sinkhorn_bwd_vmi(
                 xi1 = V.vload(xs_ub[0, vr1_tok, 0, 0], size=64)
                 temp0 = V.vmul(g0, xi0)
                 temp1 = V.vmul(g1, xi1)
-                rs0_b = _row_reduce(temp0, pair_swap_idx, cross_pair_idx)
-                rs1_b = _row_reduce(temp1, pair_swap_idx, cross_pair_idx)
+                rs0_b = _row_reduce(temp0, mask_lo, mask_hi)
+                rs1_b = _row_reduce(temp1, mask_lo, mask_hi)
                 g0 = V.vmul(V.vsub(g0, rs0_b), xi0)
                 g1 = V.vmul(V.vsub(g1, rs1_b), xi1)
 
