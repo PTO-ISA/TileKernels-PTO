@@ -4,7 +4,7 @@ from tilelang.ascend.language import simd as S
 from tilelang.ascend.language import vmi as V
 
 from tile_kernels.config import get_num_vec_cores
-from tile_kernels.moe.sqrt_softplus import sqrt_softplus_backward_vmi
+from tile_kernels.moe.sqrt_softplus_vmi import sqrt_softplus_backward_vmi
 from tile_kernels.utils import align
 
 

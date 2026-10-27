@@ -2,7 +2,7 @@ import tilelang
 from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
 
-from tile_kernels.moe.sqrt_softplus import sqrt_softplus_forward_vmi
+from tile_kernels.moe.sqrt_softplus_vmi import sqrt_softplus_forward_vmi
 from tile_kernels.utils import align, ceil_div
 
 
@@ -287,6 +287,7 @@ def get_moe_topk_gate_forward_kernel_vmi(
                     V.vcmax(V.vload(invalid_logits_ub[0], size=vector_length), full),
                     invalid_logits_ub[0], stride=1, group=1,
                 )
+            T.device_assert(invalid_logits_ub[0] == 0, msg='moe_topk_gate_forward input contains nan or inf or kernel has internal error!')
     # fmt: on
 
     return moe_topk_gate_forward_kernel_vmi
