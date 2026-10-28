@@ -19,7 +19,7 @@ def get_topk_gate_kernel_parallel(num_experts: int, num_topk: int, num_vec_cores
     num_aligned_experts = num_groups * experts_per_group
 
     # Round up to a multiple of vector_length for UB alignment of the index output.
-    num_aligned_topk = align(num_topk, vector_length)
+    num_aligned_topk = align(num_topk * 2, vector_length)
 
     num_tokens = T.dynamic('num_tokens')
 
@@ -36,8 +36,8 @@ def get_topk_gate_kernel_parallel(num_experts: int, num_topk: int, num_vec_cores
             T.annotate_buffer_versions({scores_ub: num_stages, out_ub: num_stages, invalid_logits_ub: 1})
 
             with T.SimdVF(lanes=64):
-                T.clear(out_ub)
-                T.clear(invalid_logits_ub)
+                for j in T.Parallel(vector_length):
+                    invalid_logits_ub[j] = 0
 
             for w in T.Pipelined(
                 T.ceildiv(num_tokens, num_vec_cores),
@@ -49,6 +49,8 @@ def get_topk_gate_kernel_parallel(num_experts: int, num_topk: int, num_vec_cores
                     T.copy(scores[row, :], scores_ub[:num_experts])
 
                     with T.SimdVF(lanes=64):
+                        for j in T.Parallel(num_aligned_topk):
+                            out_ub[j] = 0
                         nonfinite = T.alloc_shared((num_aligned_experts,), T.int32)
                         candidates = T.alloc_shared((num_aligned_experts,), T.int32)
                         max_score = T.alloc_shared((1,), T.float32)

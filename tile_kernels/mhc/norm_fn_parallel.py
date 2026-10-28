@@ -77,7 +77,9 @@ def mhc_fn_normw_merge_bwd_parallel(
 
     assert hidden % hidden_block == 0, 'Ascend fn/normw merge requires hidden divisible by hidden_block'
     assert hidden_block % 128 == 0, 'Ascend fn/normw merge SIMD path requires hidden_block divisible by 128'
-    assert (3 * mhc_mult3 + 2) * hidden_block * 4 * num_stages <= get_max_ub_per_vector_core(use_simt=False), 'merge backward multi-buffer allocation exceeds UB capacity'
+    assert (3 * mhc_mult3 + 2) * hidden_block * 4 * num_stages <= get_max_ub_per_vector_core(use_simt=False), (
+        'merge backward multi-buffer allocation exceeds UB capacity'
+    )
 
     num_hidden_blocks = hidden // hidden_block
 

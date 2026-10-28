@@ -89,7 +89,7 @@ def get_per_token_cast_kernel_parallel(
 
     @T.macro
     def dequantize_input(x_ub, scales_ub, out_ub):
-        with T.SimdVF(lanes=64):
+        with T.SimdVF(lanes=128 if in_config.dtype == T.float4_e2m1fn else 64):
             for i, j in T.Parallel(block_m, block_k):
                 group = j // num_per_channels
                 if in_config.use_packed_ue8m0:
@@ -102,7 +102,7 @@ def get_per_token_cast_kernel_parallel(
 
     @T.macro
     def quantize_values(x_ub, amax_ub, sf_inv_ub, sf_dense_ub, out_ub):
-        with T.SimdVF(lanes=64):
+        with T.SimdVF(lanes=128 if value_dtype == T.bfloat16 or out_config.dtype == T.float4_e2m1fn else 64):
             if not cast_only:
                 values = T.reshape(x_ub, (block_m, num_groups, num_per_channels))
                 T.reduce_absmax(values, amax_ub[:, 0:num_groups], dim=2)

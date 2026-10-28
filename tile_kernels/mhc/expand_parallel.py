@@ -17,8 +17,11 @@ def expand_to_mhc_fwd_parallel(x, o, h_blk: int, num_stages: int, num_vec_cores:
         o_ub = T.alloc_shared((mhc, h_blk), T.bfloat16)
         T.annotate_buffer_versions({x_ub: num_stages, o_ub: num_stages})
         for pid_n, pid_h in T.Persistent(
-            [num_tokens, T.ceildiv(h, h_blk)], num_vec_cores, core_id,
-            group_size=1, num_stages=num_stages,
+            [num_tokens, T.ceildiv(h, h_blk)],
+            num_vec_cores,
+            core_id,
+            group_size=1,
+            num_stages=num_stages,
         ):
             T.copy(x[pid_n, pid_h * h_blk], x_ub)
             with T.SimdVF(lanes=128):
@@ -40,8 +43,11 @@ def expand_to_mhc_bwd_parallel(o_grad, x_grad, h_blk: int, num_stages: int, num_
         x_grad_ub = T.alloc_shared((h_blk,), T.bfloat16)
         T.annotate_buffer_versions({o_grad_ub: num_stages, x_grad_ub: num_stages})
         for pid_n, pid_h in T.Persistent(
-            [num_tokens, T.ceildiv(h, h_blk)], num_vec_cores, core_id,
-            group_size=1, num_stages=num_stages,
+            [num_tokens, T.ceildiv(h, h_blk)],
+            num_vec_cores,
+            core_id,
+            group_size=1,
+            num_stages=num_stages,
         ):
             T.copy(o_grad[pid_n, 0, pid_h * h_blk], o_grad_ub)
             with T.SimdVF(lanes=64):

@@ -20,8 +20,11 @@ def get_normalize_weight_kernel_parallel(num_topk: int, num_vec_cores: int, use_
     ):
         with T.Kernel(num_vec_cores) as core_id:
             for tile_id in T.Persistent(
-                [T.ceildiv(num_tokens, tile)], num_vec_cores, core_id,
-                group_size=1, num_stages=num_stages,
+                [T.ceildiv(num_tokens, tile)],
+                num_vec_cores,
+                core_id,
+                group_size=1,
+                num_stages=num_stages,
             ):
                 row = tile_id * tile
                 valid_rows = T.min(tile, num_tokens - row)
@@ -29,7 +32,7 @@ def get_normalize_weight_kernel_parallel(num_topk: int, num_vec_cores: int, use_
                 norm_ub = T.alloc_shared((tile, topk_stride), T.float32)
                 denom_ub = T.alloc_shared((tile,), T.float32)
                 T.annotate_buffer_versions({weights_ub: num_stages, norm_ub: num_stages, denom_ub: num_stages})
-                T.copy(topk_weights[row:row + valid_rows, :], weights_ub[:valid_rows, :num_topk])
+                T.copy(topk_weights[row : row + valid_rows, :], weights_ub[:valid_rows, :num_topk])
 
                 if use_tile_reduce:
                     with T.SimdVF(lanes=64):
@@ -57,7 +60,7 @@ def get_normalize_weight_kernel_parallel(num_topk: int, num_vec_cores: int, use_
                         if j < num_topk:
                             norm_ub[i, j] = weights_ub[i, j] / denom_ub[i]
 
-                T.copy(denom_ub[:valid_rows], denominator[row:row + valid_rows])
-                T.copy(norm_ub[:valid_rows, :num_topk], normalized_weights[row:row + valid_rows, :])
+                T.copy(denom_ub[:valid_rows], denominator[row : row + valid_rows])
+                T.copy(norm_ub[:valid_rows, :num_topk], normalized_weights[row : row + valid_rows, :])
 
     return normalize_weight_kernel
