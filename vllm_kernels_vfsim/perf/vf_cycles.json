@@ -1,0 +1,993 @@
+[
+  {
+    "case": "candidate_blocks",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 1627.0,
+        "call_count": 7,
+        "rows": 7,
+        "csv": "/root/.cache/vfsim/run__u8quc_o/OPPROF_20261029112356_LGEVGGUFOUTHASDV/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.367691993713379,
+        "out_dir": "/root/.cache/vfsim/run__u8quc_o"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 802.0,
+        "call_count": 4,
+        "rows": 4,
+        "csv": "/root/.cache/vfsim/run_y60qdqd0/OPPROF_20261029112410_HNMUOLEHZLNGRZNX/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.327752828598022,
+        "out_dir": "/root/.cache/vfsim/run_y60qdqd0"
+      }
+    },
+    "ratio_pto_over_asc": 2.0286783042394014,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "compress",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 762.0,
+        "call_count": 3,
+        "rows": 3,
+        "csv": "/root/.cache/vfsim/run_ji6_qpbc/OPPROF_20261029112422_WTSHZKHUXWKCVDXB/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.37303614616394,
+        "out_dir": "/root/.cache/vfsim/run_ji6_qpbc"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 706.0,
+        "call_count": 3,
+        "rows": 3,
+        "csv": "/root/.cache/vfsim/run_3hs3u0gc/OPPROF_20261029112435_DJIZRXTNHDQIDIDO/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.346426010131836,
+        "out_dir": "/root/.cache/vfsim/run_3hs3u0gc"
+      }
+    },
+    "ratio_pto_over_asc": 1.0793201133144477,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "dflash",
+    "variant": "dot",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 91.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_9el9l878/OPPROF_20261029112448_BIFEVPQAOJGTIUMY/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.35320258140564,
+        "out_dir": "/root/.cache/vfsim/run_9el9l878"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 91.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_7yb832iz/OPPROF_20261029112501_ZMENJUGRLFVATAGC/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.32553219795227,
+        "out_dir": "/root/.cache/vfsim/run_7yb832iz"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "dflash",
+    "variant": "mean",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 66.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_ws95zo_h/OPPROF_20261029112514_HWSOAOLTAYYKJIHT/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.348598003387451,
+        "out_dir": "/root/.cache/vfsim/run_ws95zo_h"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 71.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_w6erfgwk/OPPROF_20261029113552_KQKEGDDMKSLOPCKM/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 21.5,
+        "out_dir": "/root/.cache/vfsim/run_w6erfgwk"
+      }
+    },
+    "ratio_pto_over_asc": 0.9295774647887324,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 134.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_0kbclce0/OPPROF_20261029112540_VRXMMJGDIUXXXCXG/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 11.284202337265015,
+        "out_dir": "/root/.cache/vfsim/run_0kbclce0"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 136.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_072i4izs/OPPROF_20261029112551_IUUNMGRDDMPLTPNG/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.32620906829834,
+        "out_dir": "/root/.cache/vfsim/run_072i4izs"
+      }
+    },
+    "ratio_pto_over_asc": 0.9852941176470589,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 168.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_p4t3p8jl/OPPROF_20261029112605_XNBHBZWGLUBFJQIF/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.362899541854858,
+        "out_dir": "/root/.cache/vfsim/run_p4t3p8jl"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 141.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_azrtnqjw/OPPROF_20261029112617_DDNLWGMFPDYJFJRX/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.305152654647827,
+        "out_dir": "/root/.cache/vfsim/run_azrtnqjw"
+      }
+    },
+    "ratio_pto_over_asc": 1.1914893617021276,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "gather",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 458.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_ozkc5__h/OPPROF_20261029112629_GVVDKWWSRYQMPDER/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.386915922164917,
+        "out_dir": "/root/.cache/vfsim/run_ozkc5__h"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 467.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_olmtstow/OPPROF_20261029112642_SDPCUPAZFSVSISKP/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.345751523971558,
+        "out_dir": "/root/.cache/vfsim/run_olmtstow"
+      }
+    },
+    "ratio_pto_over_asc": 0.9807280513918629,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "get_kv_index",
+    "variant": "blocks",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 114.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_d_r77mkq/OPPROF_20261029112654_JLCFXLYKYNCRDJID/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.3088219165802,
+        "out_dir": "/root/.cache/vfsim/run_d_r77mkq"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 114.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_ftg5v_ed/OPPROF_20261029112706_IGOSEQNSFAFWYMCX/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.329718828201294,
+        "out_dir": "/root/.cache/vfsim/run_ftg5v_ed"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "get_kv_index",
+    "variant": "identity",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 462.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_syr4_yog/OPPROF_20261029112720_PGFGZRLYJSWKHXQE/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.327776432037354,
+        "out_dir": "/root/.cache/vfsim/run_syr4_yog"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 471.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_n2t2s_wq/OPPROF_20261029112733_FTTUMGGYZQMNRLRR/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.334813117980957,
+        "out_dir": "/root/.cache/vfsim/run_n2t2s_wq"
+      }
+    },
+    "ratio_pto_over_asc": 0.9808917197452229,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "get_kv_index",
+    "variant": "dflash",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 574.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_159yguuo/OPPROF_20261029112745_RUJPBZWCHPFIGTDY/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.387171268463135,
+        "out_dir": "/root/.cache/vfsim/run_159yguuo"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 475.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run__qtvpsmz/OPPROF_20261029112759_HHVLDVUEPHBFAEJE/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.29039454460144,
+        "out_dir": "/root/.cache/vfsim/run__qtvpsmz"
+      }
+    },
+    "ratio_pto_over_asc": 1.2084210526315788,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "image_embed_ops",
+    "variant": "copy",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 50.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_04_knurl/OPPROF_20261029112812_QTXDCBVFTSOTMRBY/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.285539865493774,
+        "out_dir": "/root/.cache/vfsim/run_04_knurl"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 50.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_hbxl0ek8/OPPROF_20261029112824_SMKIJTKYTNZDWLNK/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.347968816757202,
+        "out_dir": "/root/.cache/vfsim/run_hbxl0ek8"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "image_embed_ops",
+    "variant": "pool",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 526.0,
+        "call_count": 2,
+        "rows": 2,
+        "csv": "/root/.cache/vfsim/run_shqmrvlr/OPPROF_20261029112837_CKJGYICGIWEFWAIS/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.346426486968994,
+        "out_dir": "/root/.cache/vfsim/run_shqmrvlr"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 536.0,
+        "call_count": 2,
+        "rows": 2,
+        "csv": "/root/.cache/vfsim/run__3cxdfdx/OPPROF_20261029112849_CIGEFZLXUHAOWRVI/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.347927331924438,
+        "out_dir": "/root/.cache/vfsim/run__3cxdfdx"
+      }
+    },
+    "ratio_pto_over_asc": 0.9813432835820896,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "image_embed_ops",
+    "variant": "scatter",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 88.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_ea3pwpjo/OPPROF_20261029112901_MJPCQYDACEIKWNNB/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.329986095428467,
+        "out_dir": "/root/.cache/vfsim/run_ea3pwpjo"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 88.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_gcvejako/OPPROF_20261029112914_TSSJINSLSQRYVHYO/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.348590850830078,
+        "out_dir": "/root/.cache/vfsim/run_gcvejako"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "kv_index_cat",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 62.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_p_exwg_o/OPPROF_20261029112926_CCLRDFSZLXSOBLTU/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.308144330978394,
+        "out_dir": "/root/.cache/vfsim/run_p_exwg_o"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 62.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_1dvnjrtg/OPPROF_20261029112938_XNUIKSOHZKTKSQNO/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.34719443321228,
+        "out_dir": "/root/.cache/vfsim/run_1dvnjrtg"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "load_paged_kv_cache",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 596.0,
+        "call_count": 2,
+        "rows": 2,
+        "csv": "/root/.cache/vfsim/run_03uou1gn/OPPROF_20261029112951_GILVJWFAVEXCIYBR/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 11.301563024520874,
+        "out_dir": "/root/.cache/vfsim/run_03uou1gn"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 601.0,
+        "call_count": 2,
+        "rows": 2,
+        "csv": "/root/.cache/vfsim/run_f5bvc0hx/OPPROF_20261029113002_MBXARIXBAPCEJIGY/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.28430438041687,
+        "out_dir": "/root/.cache/vfsim/run_f5bvc0hx"
+      }
+    },
+    "ratio_pto_over_asc": 0.9916805324459235,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "norm",
+    "variant": "rms",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 162.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_ixxcyuy8/OPPROF_20261029113014_BSNKVFRHAPVMWMIQ/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.393974781036377,
+        "out_dir": "/root/.cache/vfsim/run_ixxcyuy8"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 129.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_gsjtcuqa/OPPROF_20261029113028_NBSXLCEMNDCCDRJI/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.328433990478516,
+        "out_dir": "/root/.cache/vfsim/run_gsjtcuqa"
+      }
+    },
+    "ratio_pto_over_asc": 1.255813953488372,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "norm",
+    "variant": "unpack",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 54.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_wdum5zuf/OPPROF_20261029113040_MPAXGGATUMLYNFXZ/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.311177015304565,
+        "out_dir": "/root/.cache/vfsim/run_wdum5zuf"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 58.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run__qd2knvp/OPPROF_20261029113053_MRSUQOCZICFXXOPZ/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.303557395935059,
+        "out_dir": "/root/.cache/vfsim/run__qd2knvp"
+      }
+    },
+    "ratio_pto_over_asc": 0.9310344827586207,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "norm",
+    "variant": "quant",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 181.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_w71scth9/OPPROF_20261029113107_ZYJJDJBWPTHVNJZD/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.311506032943726,
+        "out_dir": "/root/.cache/vfsim/run_w71scth9"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 126.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_1ddt3iqp/OPPROF_20261029113120_CFTYCSZAEVJJDMDJ/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.313844919204712,
+        "out_dir": "/root/.cache/vfsim/run_1ddt3iqp"
+      }
+    },
+    "ratio_pto_over_asc": 1.4365079365079365,
+    "flag": "WIN",
+    "asc_vs_pto": "no-dump"
+  },
+  {
+    "case": "norm",
+    "variant": "layout",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 78.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_ex_07vnc/OPPROF_20261029113133_QHVAHIRZIEKPLZNB/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.271998167037964,
+        "out_dir": "/root/.cache/vfsim/run_ex_07vnc"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 78.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_ssfqsb9n/OPPROF_20261029113147_XYLKYBAYUULCUPFD/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.352694272994995,
+        "out_dir": "/root/.cache/vfsim/run_ssfqsb9n"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "no-dump"
+  },
+  {
+    "case": "random_sampling",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 1449.0,
+        "call_count": 5,
+        "rows": 5,
+        "csv": "/root/.cache/vfsim/run_ux8q4kfp/OPPROF_20261029113200_ZCFNLQXCKGYEBCPD/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.346904993057251,
+        "out_dir": "/root/.cache/vfsim/run_ux8q4kfp"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 1402.0,
+        "call_count": 5,
+        "rows": 5,
+        "csv": "/root/.cache/vfsim/run_69xy302w/OPPROF_20261029113212_OGNYZQFLPGMIWGCD/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.346903085708618,
+        "out_dir": "/root/.cache/vfsim/run_69xy302w"
+      }
+    },
+    "ratio_pto_over_asc": 1.0335235378031384,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "sampler",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 709.0,
+        "call_count": 3,
+        "rows": 3,
+        "csv": "/root/.cache/vfsim/run_n30cqy9h/OPPROF_20261029113225_PTAZXLOBRDMNNKZQ/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.349810600280762,
+        "out_dir": "/root/.cache/vfsim/run_n30cqy9h"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 312.0,
+        "call_count": 3,
+        "rows": 3,
+        "csv": "/root/.cache/vfsim/run_bu09v_sk/OPPROF_20261029113237_YBBFGENPUEGPNDJN/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.350215435028076,
+        "out_dir": "/root/.cache/vfsim/run_bu09v_sk"
+      }
+    },
+    "ratio_pto_over_asc": 2.2724358974358974,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "schedule_mtp_varlen",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 246.0,
+        "call_count": 2,
+        "rows": 2,
+        "csv": "/root/.cache/vfsim/run_5p3ccn2i/OPPROF_20261029113249_DDCXCOSHJKRKUWEA/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.326355695724487,
+        "out_dir": "/root/.cache/vfsim/run_5p3ccn2i"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 225.0,
+        "call_count": 2,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_xuigdpz3/OPPROF_20261029113302_JSEVSRAOZABTCLHD/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 11.343726873397827,
+        "out_dir": "/root/.cache/vfsim/run_xuigdpz3"
+      }
+    },
+    "ratio_pto_over_asc": 1.0933333333333333,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "store_kv_cache",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 200.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_78_ju5f9/OPPROF_20261029113313_KIOUSGHQZSVZECGE/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.347340106964111,
+        "out_dir": "/root/.cache/vfsim/run_78_ju5f9"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 134.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_p2mnzna8/OPPROF_20261029113326_ELWRMVHJHPMDGBYF/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.352846622467041,
+        "out_dir": "/root/.cache/vfsim/run_p2mnzna8"
+      }
+    },
+    "ratio_pto_over_asc": 1.492537313432836,
+    "flag": "WIN",
+    "asc_vs_pto": "no-dump"
+  },
+  {
+    "case": "structure_output",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 78.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_q9q1i6jh/OPPROF_20261029113339_UBCMUZMLKCFRVFRV/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.288603067398071,
+        "out_dir": "/root/.cache/vfsim/run_q9q1i6jh"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 78.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_qll8p89o/OPPROF_20261029113351_NFPVDKEGWHSMBNGC/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.327089786529541,
+        "out_dir": "/root/.cache/vfsim/run_qll8p89o"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "sum_smaller_probs",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 92.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_p3obtvn4/OPPROF_20261029113403_ZVZTZECKODAARGEQ/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.307181596755981,
+        "out_dir": "/root/.cache/vfsim/run_p3obtvn4"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 91.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_u6btlrzt/OPPROF_20261029113416_QZXWYCDLPCIGUUWE/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.28850769996643,
+        "out_dir": "/root/.cache/vfsim/run_u6btlrzt"
+      }
+    },
+    "ratio_pto_over_asc": 1.010989010989011,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "swa_index",
+    "variant": "",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 119.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_jmd_80b2/OPPROF_20261029113428_ITOELHRYXIHEVDJE/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 12.328021764755249,
+        "out_dir": "/root/.cache/vfsim/run_jmd_80b2"
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 119.0,
+        "call_count": 1,
+        "rows": 1,
+        "csv": "/root/.cache/vfsim/run_oh_hmin_/OPPROF_20261029113440_IPRANZYIWWDHPDUM/simulator/core0.veccore0/core0.veccore0_instr_exe.csv",
+        "seconds": 13.32469367980957,
+        "out_dir": "/root/.cache/vfsim/run_oh_hmin_"
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "candidate_blocks",
+    "variant": "map",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 260.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 260.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "candidate_blocks",
+    "variant": "max",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 88.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 88.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "search",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 112.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 108.0
+      }
+    },
+    "ratio_pto_over_asc": 1.037037037037037,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "filter",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 596.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 602.0
+      }
+    },
+    "ratio_pto_over_asc": 0.9900332225913622,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "quartile",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 701.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 681.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0293685756240822,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "mask",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 780.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 698.0
+      }
+    },
+    "ratio_pto_over_asc": 1.1174785100286533,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "cdf",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 1462.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 1415.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0332155477031801,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "rope",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 61.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 61.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "hadamard",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 167.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 166.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0060240963855422,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "quant",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 182.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 126.0
+      }
+    },
+    "ratio_pto_over_asc": 1.4444444444444444,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "lut",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 122.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 127.0
+      }
+    },
+    "ratio_pto_over_asc": 0.9606299212598425,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "get_kv_index",
+    "variant": "mod",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 572.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 499.0
+      }
+    },
+    "ratio_pto_over_asc": 1.1462925851703407,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "image_embed_ops",
+    "variant": "pool_bf16",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 73.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 81.0
+      }
+    },
+    "ratio_pto_over_asc": 0.9012345679012346,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "load_paged_kv_cache",
+    "variant": "fp4",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 58.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 58.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "norm",
+    "variant": "rstd",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 175.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 152.0
+      }
+    },
+    "ratio_pto_over_asc": 1.1513157894736843,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "norm",
+    "variant": "bf16",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 708.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 122.0
+      }
+    },
+    "ratio_pto_over_asc": 5.80327868852459,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "store_kv_cache",
+    "variant": "rows",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 707.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 150.0
+      }
+    },
+    "ratio_pto_over_asc": 4.713333333333333,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  }
+]
