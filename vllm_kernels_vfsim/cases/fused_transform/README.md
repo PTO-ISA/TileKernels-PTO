@@ -1,7 +1,13 @@
 # fused_transform
 
-Source: [`fused_transform.py` line 477](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/fused_transform.py#L477)
+Source: [`fused_transform.py` line 477](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/fused_transform.py#L477). One `T.SimdVF` with compile-time flags. Each flag is a one-head driver, `head_dim=128` except the LUT.
 
-One `T.SimdVF` with compile-time flags. This shape enables RMSNorm on one head of 128 bfloat16 values and leaves RoPE, Hadamard, and FP8 quant off. The quant flag is the same per-group scale as [`norm.py` line 277](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/norm.py#L277). PTO converts the whole head in one `vcvt` instead of two `UNPK_B16` loads.
+| variant | flag | shape |
+| --- | --- | --- |
+| `norm` | RMSNorm only | 128 bf16. PTO converts the head in one `vcvt` |
+| `rope` | RoPE only | 64 fp32 pairs. PTO is `vmul` / `vadd` on the logical vector |
+| `hadamard` | Hadamard only | one 64-lane butterfly, six stages, written once |
+| `quant` | FP8 quant only | per-32 scale, one `vcvt` to FP8 |
+| `lut` | FP4 reciprocal LUT | the `head_dim == 512` table, one row of 512 |
 
-Sim shape: 128 bfloat16, one core.
+The merged-store assert that requires `head_dim == 512` is the LUT arm. It compiled and matched the integer reciprocal on both targets.

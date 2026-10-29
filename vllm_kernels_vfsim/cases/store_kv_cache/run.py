@@ -24,7 +24,19 @@ CASE = "store_kv_cache"
 
 def main() -> None:
     impl = sys.argv[1]
+    variant = sys.argv[2] if len(sys.argv) > 2 else "row"
     g = torch.Generator().manual_seed(12)
+    if variant == "rows":
+        mod = __import__(f"cases.store_kv_cache.rows_{impl}", fromlist=["x"])
+        x = (torch.randn(2, 128, generator=g) * 2).to(torch.bfloat16)
+        q, sf = mod.launch(x)
+        ref_sf = []
+        for row in x.float():
+            _, scale = reference_quant(row)
+            ref_sf.append(scale)
+        expect = torch.stack(ref_sf)
+        finish(CASE, impl, sf, expect, exact=False, rtol=2e-2, atol=2e-2, variant=variant)
+        return
     x = (torch.randn(128, generator=g) * 2).to(torch.bfloat16)
     q, sf = (launch_asc if impl == "asc" else launch_pto)(x)
     ref_q, ref_sf = reference_quant(x.float())

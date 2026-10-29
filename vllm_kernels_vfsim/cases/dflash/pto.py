@@ -33,25 +33,17 @@ def compile_dot():
             with T.SimdVF():
                 mask = V.create_mask(VEC, size=VEC)
                 zero = V.vbrc(T.float32(0.0), size=VEC)
-                acc0 = V.alloc_var(T.float32, size=VEC)
-                acc1 = V.alloc_var(T.float32, size=VEC)
-                acc2 = V.alloc_var(T.float32, size=VEC)
-                acc3 = V.alloc_var(T.float32, size=VEC)
-                acc0 = zero
-                acc1 = zero
-                acc2 = zero
-                acc3 = zero
+                acc = V.alloc_local((ROWS,), V.vreg(VEC, T.float32))
+                for row in T.unroll(ROWS, explicit=True):
+                    acc[row] = zero
                 for i in T.serial(DIM // VEC):
                     off = i * VEC
                     w_v = V.vcvt(V.vload(w_ub[off], size=VEC), "float32")
-                    acc0 = V.vmula(acc0, w_v, V.vcvt(V.vload(x_ub[0, off], size=VEC), "float32"), mask)
-                    acc1 = V.vmula(acc1, w_v, V.vcvt(V.vload(x_ub[1, off], size=VEC), "float32"), mask)
-                    acc2 = V.vmula(acc2, w_v, V.vcvt(V.vload(x_ub[2, off], size=VEC), "float32"), mask)
-                    acc3 = V.vmula(acc3, w_v, V.vcvt(V.vload(x_ub[3, off], size=VEC), "float32"), mask)
-                V.vstore(V.vcadd(acc0, mask, reassoc=True), sum_ub[0])
-                V.vstore(V.vcadd(acc1, mask, reassoc=True), sum_ub[1])
-                V.vstore(V.vcadd(acc2, mask, reassoc=True), sum_ub[2])
-                V.vstore(V.vcadd(acc3, mask, reassoc=True), sum_ub[3])
+                    for row in T.unroll(ROWS, explicit=True):
+                        x_v = V.vcvt(V.vload(x_ub[row, off], size=VEC), "float32")
+                        acc[row] = V.vmula(acc[row], w_v, x_v, mask)
+                for row in T.unroll(ROWS, explicit=True):
+                    V.vstore(V.vcadd(acc[row], mask, reassoc=True), sum_ub[row])
             T.copy(sum_ub, out)
 
     return kernel

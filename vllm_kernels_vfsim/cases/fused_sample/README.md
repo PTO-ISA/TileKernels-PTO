@@ -1,17 +1,14 @@
 # fused_sample
 
-Source: [`fused_sample.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/fused_sample.py) (20 `T.SimdVF` regions, lines 35, 214, 223, 261, 282, 292, 327, 347, 391, 446, 469, 484, 522, 531, 550, 566, 580, 592, 625, 667).
+Source: [`fused_sample.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/fused_sample.py). Twenty `T.SimdVF` regions. Each group below is its own driver. Vocab 128, one core.
 
-The simulated kernel is the part that is not already covered by a smaller case:
+| variant | lines | what runs |
+| --- | --- | --- |
+| `lse` | 214, 223, 261, 625 | online softmax and argmax |
+| `search` | 35 | three-threshold mass and count |
+| `filter` | 282, 292 | temperature softmax and the `2^-32` cutoff |
+| `quartile` | 327, 347, 391, 446 | bound init, bit-pattern quartiles, pick, keep count |
+| `mask` | 469, 484, 522, 550, 566 | 0/1 keep mask, log-mass, filtered and plain logprob |
+| `cdf` | 531, 580, 592, 667 | zero, fixed-point fold, both inclusive scans |
 
-- init running max, merge two chunks of online softmax, write `logsumexp` (lines 214, 223, 261)
-- argmax, ties take the smallest index (line 625)
-
-The other regions are the same vector patterns, checked in the cases that own that pattern:
-
-- thresholded exp sums and merging adds: `sum_smaller_probs` (lines 35, 292, 469, 484)
-- bitmask-style select: `structure_output` (lines 550, 566)
-- fixed-point fold and both inclusive scans: `random_sampling` (lines 531, 580, 592, 667)
-- quartile bit shifts and predicate pick: the same `vshl` / `vsel` / `vcmp` sequence as `load_paged_kv_cache` and `schedule_mtp_varlen` (lines 327, 347, 391, 446, 522)
-
-Sim shape: vocab 128, one core. A full 8192-wide search is not run under the simulator.
+ASC `pld` / `pst` did not lower. Both mask drivers store the predicate as 0/1 and reload it. PTO ceiling-rounds the keep count with a toward-zero convert plus one, because VMI has no `rounding="C"`.

@@ -31,6 +31,12 @@ def main() -> None:
     elif variant == "identity":
         got = mod.launch_identity(5, 20)
         expect = ref.reference_identity(5, 20)
+    elif variant == "mod":
+        mod_impl = __import__(f"cases.get_kv_index.mod_{impl}", fromlist=["x"])
+        got = mod_impl.launch(1, 40)
+        expect = torch.empty(64, dtype=torch.int32)
+        for i in range(64):
+            expect[i] = (i + 1) % 6 if i < 40 else -1
     else:
         got = mod.launch_dflash(-3, 100, 40)
         expect = ref.reference_dflash(-3, 100, 40)

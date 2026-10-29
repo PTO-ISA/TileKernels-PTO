@@ -40,6 +40,22 @@ def main() -> None:
         ref_q, ref_sf = reference_quant(x)
         finish(CASE, impl, sf, ref_sf, exact=False, rtol=1e-4, atol=1e-4, variant=variant + "_sf")
         finish(CASE, impl, q.float(), ref_q.float(), exact=False, rtol=1e-1, atol=5e-2, variant=variant + "_q")
+    elif variant == "rstd":
+        x = torch.randn(128, generator=g)
+        mod_r = __import__(f"cases.norm.rstd_{impl}", fromlist=["x"])
+        got = mod_r.launch(x)
+        var = (x * x).sum() / 128 + 1e-5
+        expect = torch.rsqrt(var).reshape(1)
+        finish(CASE, impl, got, expect, exact=False, rtol=1e-3, atol=1e-3, variant=variant)
+    elif variant == "bf16":
+        x = torch.randn(256, generator=g, dtype=torch.bfloat16)
+        mod_b = __import__(f"cases.norm.bf16_{impl}", fromlist=["x"])
+        got_amax, got_q = mod_b.launch(x)
+        expect = x.float().abs().reshape(8, 32).amax(dim=1)
+        finish(CASE, impl, got_amax, expect, exact=False, rtol=2e-2, atol=2e-2, variant=variant)
+        scales = torch.clamp(expect, min=1e-4) / 448.0
+        ref_q = (x.float().reshape(8, 32) / scales[:, None]).reshape(256).to(torch.float8_e4m3fn)
+        finish(CASE, impl, got_q.float(), ref_q.float(), exact=False, rtol=2e-1, atol=1e-1, variant=variant + "_q")
     else:
         table = torch.arange(128, dtype=torch.int32).to(torch.int16).view(torch.uint16)
         idx, got = (quant_asc if impl == "asc" else quant_pto).launch_layout(table)

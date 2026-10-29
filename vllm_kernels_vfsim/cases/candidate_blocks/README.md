@@ -1,12 +1,11 @@
 # candidate_blocks
 
-Sources in [`candidate_blocks.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/candidate_blocks.py):
+Sources in [`candidate_blocks.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/candidate_blocks.py). One core, 64 lanes.
 
-- lines 56, 64, 79: zero, `ceil(len / 16384)` per lane, horizontal sum
-- lines 90 and 127: Hillis-Steele prefix of those counts (the per-core scan and the per-row tile prefix are the same vector scan)
-- line 149: task-to-row binary search is the same `vselr` prefix walk; this shape checks the prefix it searches
-- line 198: the bf16 block max is a horizontal max of the same kind as `vcmax` in `norm` quant
-- line 258: compact token contribution `min(block, length - id * block)`
-- line 328: restore `block_id * block + index % block`, or `-1`
+| variant | lines | what runs |
+| --- | --- | --- |
+| `main` | 56, 64, 79, 90, 127, 258, 328 | counts, two prefix scans, compact, restore |
+| `map` | 149 | 4-row binary search packed as `(task, length)` with `vintlv` |
+| `max` | 198 | bf16 block max, `block_size` 8. PTO is `vcmax(..., group=8)` |
 
-Sim shape: 64 lanes, 4 candidate blocks, block size 16, one core. One kernel runs the count, prefix, restore, and compact VFs.
+The main kernel's 2.03x cycle ratio is seven ASC launches of the 64-lane scan against four PTO launches. Those launches are not restacked.

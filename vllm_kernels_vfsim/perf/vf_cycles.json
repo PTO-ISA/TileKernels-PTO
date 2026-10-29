@@ -700,5 +700,294 @@
     "ratio_pto_over_asc": 1.0,
     "flag": "OK",
     "asc_vs_pto": "match"
+  },
+  {
+    "case": "candidate_blocks",
+    "variant": "map",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 260.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 260.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "candidate_blocks",
+    "variant": "max",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 88.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 88.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "search",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 112.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 108.0
+      }
+    },
+    "ratio_pto_over_asc": 1.037037037037037,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "filter",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 596.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 602.0
+      }
+    },
+    "ratio_pto_over_asc": 0.9900332225913622,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "quartile",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 701.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 681.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0293685756240822,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "mask",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 780.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 698.0
+      }
+    },
+    "ratio_pto_over_asc": 1.1174785100286533,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_sample",
+    "variant": "cdf",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 1462.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 1415.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0332155477031801,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "rope",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 61.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 61.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "hadamard",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 167.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 166.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0060240963855422,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "quant",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 182.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 126.0
+      }
+    },
+    "ratio_pto_over_asc": 1.4444444444444444,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "fused_transform",
+    "variant": "lut",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 122.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 127.0
+      }
+    },
+    "ratio_pto_over_asc": 0.9606299212598425,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "get_kv_index",
+    "variant": "mod",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 572.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 499.0
+      }
+    },
+    "ratio_pto_over_asc": 1.1462925851703407,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "image_embed_ops",
+    "variant": "pool_bf16",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 73.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 81.0
+      }
+    },
+    "ratio_pto_over_asc": 0.9012345679012346,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "load_paged_kv_cache",
+    "variant": "fp4",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 58.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 58.0
+      }
+    },
+    "ratio_pto_over_asc": 1.0,
+    "flag": "OK",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "norm",
+    "variant": "rstd",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 175.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 152.0
+      }
+    },
+    "ratio_pto_over_asc": 1.1513157894736843,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "norm",
+    "variant": "bf16",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 708.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 122.0
+      }
+    },
+    "ratio_pto_over_asc": 5.80327868852459,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
+  },
+  {
+    "case": "store_kv_cache",
+    "variant": "rows",
+    "impl": {
+      "asc": {
+        "passed": true,
+        "cycles": 707.0
+      },
+      "pto": {
+        "passed": true,
+        "cycles": 150.0
+      }
+    },
+    "ratio_pto_over_asc": 4.713333333333333,
+    "flag": "WIN",
+    "asc_vs_pto": "match"
   }
 ]

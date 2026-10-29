@@ -1,12 +1,12 @@
 # norm
 
-Sources in [`norm.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/norm.py) and the inlined helper [`rstd_1ulp.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/rstd_1ulp.py):
+Sources in [`norm.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/norm.py) and the helper inlined from [`rstd_1ulp.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/rstd_1ulp.py). One core.
 
-- line 154, variant `rms`: sum of squares, reciprocal square root, weight. Hidden 128, one row, fp32. The simulated rstd is the direct `vsqrt`/`vdiv` estimate; production wraps that estimate in the compensated residual from `rstd_1ulp.py`.
-- line 374, variant `unpack`: bfloat16 weight expanded to fp32
-- line 277, variant `quant`: per-32 amax, scale `amax/448`, FP8 e4m3. PTO uses one `vcmax(..., group=4)`
-- lines 382 and 420, variant `layout`: transpose indices `row = lane % 8`, `pack = lane >> 3`, then gather
-
-Line 235 is the bfloat16 fast amax. Its ASC body exists because 32 bfloat16 values are not one register group; the PTO form of that reduction is the grouped `vcmax` in `quant`.
-
-Sim shape: hidden 128, one core.
+| variant | lines | what runs |
+| --- | --- | --- |
+| `rms` | 154 | naive sum of squares, `vsqrt` / `vdiv`, weight. Hidden 128 |
+| `rstd` | 154 | the same VF with `compensated_div_add` and `compensated_rsqrt` inlined. Not a second `SimdVF` |
+| `bf16` | 235 | one row, 256 bf16 channels. ASC keeps `vld2` / `vcgmax`. PTO is `vcmax(..., group=8)` and one `vcvt` to FP8 |
+| `quant` | 277 | fp32 per-32 amax and FP8. PTO uses one `vcmax(..., group=4)` |
+| `unpack` | 374 | bfloat16 weight expanded to fp32 |
+| `layout` | 382, 420 | transpose index, then gather |

@@ -34,7 +34,14 @@ def main() -> None:
         inv = 1.0 / 4
         got = mod.launch_pool(window, inv)
         finish(CASE, impl, got, reference_pool(window, inv), exact=False, rtol=1e-5, atol=1e-5, variant=variant)
-    else:
+    elif variant == "pool_bf16":
+        window = torch.randn(4, 128, generator=g, dtype=torch.bfloat16)
+        inv = 1.0 / 4
+        mod_b = __import__(f"cases.image_embed_ops.pool_bf16_{impl}", fromlist=["x"])
+        got = mod_b.launch(window, inv)
+        expect = (window.float().sum(0) * inv).to(torch.bfloat16)
+        finish(CASE, impl, got.float(), expect.float(), exact=False, rtol=2e-2, atol=2e-2, variant=variant)
+    elif variant == "scatter":
         window = torch.randn(4, 64, generator=g)
         got = mod.launch_scatter(window)
         finish(CASE, impl, got, reference_scatter(window), variant=variant)

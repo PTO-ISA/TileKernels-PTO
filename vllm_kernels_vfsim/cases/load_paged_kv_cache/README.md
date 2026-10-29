@@ -1,8 +1,10 @@
 # load_paged_kv_cache
 
-Sources in [`load_paged_kv_cache.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/load_paged_kv_cache.py):
+Sources in [`load_paged_kv_cache.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/load_paged_kv_cache.py). One core.
 
-- line 258: FP8 e4m3 times a UE8M0 scale. Low 32 lanes use scale byte 0 shifted by 23; high 32 lanes use byte 1 shifted by 15. FP4 cast is the other compile-time arm and is not in this small shape.
-- line 326: a missing page stores zeros
+| variant | line | arm |
+| --- | --- | --- |
+| `fp8` | 258 and 326 | FP8 e4m3 times a UE8M0 scale, and a missing page stores zeros. 64 elements |
+| `fp4` | 258 | one page, 128 logical fp4 values. `vcvt` from packed `float4_e2m1fn` compiled. The check is the zero codepoint |
 
-Sim shape: 64 elements, one core.
+PTO FP4 is one `vinterpret_cast` and one `vcvt`, not `UNPK4` plus `part`.

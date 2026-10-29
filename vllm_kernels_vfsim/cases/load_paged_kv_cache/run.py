@@ -24,6 +24,14 @@ CASE = "load_paged_kv_cache"
 
 def main() -> None:
     impl = sys.argv[1]
+    variant = sys.argv[2] if len(sys.argv) > 2 else "fp8"
+    if variant == "fp4":
+        mod = __import__(f"cases.load_paged_kv_cache.fp4_{impl}", fromlist=["x"])
+        raw = torch.zeros(64, dtype=torch.uint8)
+        scale = torch.ones(128, dtype=torch.bfloat16)
+        got = mod.launch(raw, scale)
+        finish(CASE, impl, got.float(), torch.zeros(128), exact=False, rtol=0, atol=0, variant=variant)
+        return
     raw = torch.full((64,), 0x38, dtype=torch.uint8)
     packed = 127 | (128 << 8)
     got = (launch_asc if impl == "asc" else launch_pto)(raw, packed)

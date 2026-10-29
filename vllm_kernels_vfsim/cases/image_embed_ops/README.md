@@ -1,10 +1,10 @@
 # image_embed_ops
 
-Sources, all under [`image_embed_ops.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/image_embed_ops.py):
+Sources in [`image_embed_ops.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/image_embed_ops.py). One core.
 
-- line 125, variant `copy`: bfloat16 UB row copy, 128 lanes
-- line 320, variant `pool`: zero a `D*D` by `dim` window before the mean
-- line 342, variant `pool`: sum the window in fp32 and scale by `1/(vh*vw)`
-- line 375, variant `scatter`: transpose `[D*D, dim]` to `[dim, D, D]`
-
-Sim shape: hidden 128, `D=2`, dim 64, fp32 for the pool and scatter. One core.
+| variant | line | shape |
+| --- | --- | --- |
+| `copy` | 125 | 128 bf16, UB row copy |
+| `pool` | 320 and 342, fp32 arm | `D=2`, dim 64, zero then mean |
+| `pool_bf16` | 342, bf16 arm | `D=2`, dim 128. ASC keeps the even/odd `part` pack. PTO stores one `vcvt` to bfloat16 |
+| `scatter` | 375 | transpose `[D*D, dim]` to `[dim, D, D]` |

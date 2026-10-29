@@ -1,9 +1,8 @@
 # store_kv_cache
 
-Sources:
+Sources in [`store_kv_cache.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/store_kv_cache.py) and [`kv_quant.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/kv_quant.py). One core, 128 bf16, four groups of 32, FP8 scale `amax/448`.
 
-- [`store_kv_cache.py` line 152](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/store_kv_cache.py#L152) scalar-row quant
-- [`store_kv_cache.py` line 184](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/store_kv_cache.py#L184) the same chain on several rows
-- helpers in [`kv_quant.py`](https://github.com/deepseek-ai/DeepInfer/blob/main/deepinfer/model_executor/layers/tilelang_ops/asc/kv_quant.py)
-
-Sim shape: one row, 128 bfloat16, four groups of 32, FP8 e4m3 scales `amax/448`. The batched VF is this chain replicated across rows; one row is what the simulator runs. PTO takes the group maximum in one `vcmax`.
+| variant | line | shape |
+| --- | --- | --- |
+| `row` | 152 | one row. PTO takes the group maximum in one `vcmax` |
+| `rows` | 184 | two rows, the same quant chain. PTO indexes the row accumulators with `T.unroll` |
