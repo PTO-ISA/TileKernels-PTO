@@ -115,7 +115,7 @@ Float-to-int `vcvt` has rounding `R`, `A`, `H`, and `Z`. It has no ceiling mode.
 
 ## Not ported
 
-None of the 64 regions were dropped. Each one has a single-core driver that compiled and matched its torch reference under `msprof op simulator`.
+None of the 64 regions were dropped. Each one has a single-core driver that compiled and matched its torch reference under `msprof op simulator`. Those 64 statements are the 43 kernels in `PERF.md`; the sum is in `README.md` under Coverage.
 
 ## Ratios that are not ISA wins
 

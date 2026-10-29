@@ -108,6 +108,8 @@ def _write_markdown(rows: list[dict]) -> None:
         "",
         "Ratio = ASC VF cycles / PTO VF cycles. Above 1.0 means the PTO kernel spent fewer simulated vector-function cycles.",
         "",
+        "43 kernels cover all 64 `with T.SimdVF():` statements in DeepInfer commit `553741557a57df44a46fb3ab72b6aafeaf945337`. One kernel can hold several statements, and nine kernels are a second arm of a statement already counted. The line-by-line sum is in `README.md` under Coverage.",
+        "",
         "Cycles are the sum of the `cycles` column on `VF` / `VF_SIMD` rows in `core0.veccore0_instr_exe.csv`. `call_count` is not a multiplier. A case that fails its numeric check has no ratio.",
         "",
         "- `OK`: ratio in [0.8, 1.1]",

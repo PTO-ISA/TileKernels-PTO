@@ -8,6 +8,69 @@ Each case is a `T.Kernel(1)` driver with a small shape. `T.copy` only moves that
 
 There is no NPU in this environment. `python cases/<name>/run.py asc|pto` re-executes under `msprof op simulator` (`Ascend950PR_9599`) and checks the result against a torch-CPU reference. PTO is also compared with ASC when `python run_all.py` loads both dumps.
 
+## Coverage
+
+The port is complete for every `with T.SimdVF():` in DeepInfer at commit `553741557a57df44a46fb3ab72b6aafeaf945337`.
+
+| | count |
+| --- | ---: |
+| `with T.SimdVF():` statements | 64 |
+| simulated kernels in `PERF.md` | 43 |
+
+A kernel is one `T.Kernel(1)` launch. Its cycle number is the sum of every vector function inside that launch, so several statements share one row. Nine further rows are a second compile-time arm of a statement already counted (a flag, a dtype, or the compensated reciprocal inlined into `norm.py` line 154). `rstd_1ulp.py` has no `SimdVF` of its own. `T.SimtVF` is outside both totals.
+
+64 statements − 30 that share a kernel with another statement + 9 extra arms = 43 kernels.
+
+| kernel | statements |
+| --- | ---: |
+| `candidate_blocks` | 7 |
+| `candidate_blocks/map` | 1 |
+| `candidate_blocks/max` | 1 |
+| `compress` | 3 |
+| `dflash/dot` | 1 |
+| `dflash/mean` | 1 |
+| `fused_sample` | 4 |
+| `fused_sample/search` | 1 |
+| `fused_sample/filter` | 2 |
+| `fused_sample/quartile` | 4 |
+| `fused_sample/mask` | 5 |
+| `fused_sample/cdf` | 4 |
+| `fused_transform` | 1 |
+| `gather` | 1 |
+| `get_kv_index/blocks` | 1 |
+| `get_kv_index/dflash` | 1 |
+| `image_embed_ops/copy` | 1 |
+| `image_embed_ops/pool` | 2 |
+| `image_embed_ops/scatter` | 1 |
+| `kv_index_cat` | 1 |
+| `load_paged_kv_cache` | 2 |
+| `norm/rms` | 1 |
+| `norm/unpack` | 1 |
+| `norm/quant` | 1 |
+| `norm/layout` | 2 |
+| `norm/bf16` | 1 |
+| `random_sampling` | 4 |
+| `sampler` | 3 |
+| `schedule_mtp_varlen` | 1 |
+| `store_kv_cache` | 1 |
+| `store_kv_cache/rows` | 1 |
+| `structure_output` | 1 |
+| `sum_smaller_probs` | 1 |
+| `swa_index` | 1 |
+| **34 kernels** | **64** |
+
+The other 9 kernels repeat a statement that is already in that sum:
+
+| kernel | same statement |
+| --- | --- |
+| `fused_transform/rope`, `/hadamard`, `/quant`, `/lut` | `fused_transform.py:477` |
+| `get_kv_index/identity`, `/mod` | `get_kv_index.py:52` |
+| `image_embed_ops/pool_bf16` | `image_embed_ops.py:342` |
+| `load_paged_kv_cache/fp4` | `load_paged_kv_cache.py:258` |
+| `norm/rstd` | `norm.py:154` |
+
+34 + 9 = 43 kernels. Each of the 64 statements has an ASC driver and a PTO driver, and both matched a torch-CPU reference under the simulator.
+
 ## Source map
 
 Line numbers are for DeepInfer commit `553741557a57df44a46fb3ab72b6aafeaf945337`.
