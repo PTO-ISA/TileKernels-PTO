@@ -4,7 +4,7 @@ import sys
 
 os.environ.setdefault("TILELANG_CACHE_DIR", "/home/jzhuang/work_dir/.tilelang_cache")
 
-import vllm_kernels.pto.norm as norm
+import deepinfer_kernels.pto.norm as norm
 
 norm.get_num_vec_cores = lambda: 40
 

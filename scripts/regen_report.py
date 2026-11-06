@@ -1,4 +1,4 @@
-"""Rebuild REPORT.md from data/*/*.jsonl. Newest row per family/name wins."""
+"""Rebuild deepinfer_kernels/REPORT.md from data/*/*.jsonl. Newest row per family/name wins."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data"
+REPORT = ROOT / "deepinfer_kernels" / "REPORT.md"
 
 
 def load_rows() -> list[dict]:
@@ -66,7 +67,8 @@ def main() -> None:
         "# ASC vs PTO on-device report",
         "",
         "Worktree `vllm-kernels-ondevice` from TileKernels-PTO `vmi-impl`.",
-        "Kernels are the DeepInfer `tilelang_ops/asc` set, launched on all vector cores.",
+        "Kernels are the DeepInfer `tilelang_ops/asc` set in package `deepinfer_kernels`, launched on all vector cores.",
+        "This report is `deepinfer_kernels/REPORT.md`.",
         "Toolchain: CANN 9.2.0 (`/usr/local/Ascend/canns/9.2.0/cann-9.2.0/set_env.sh`),",
         "conda `cann91_dev` (`torch-npu==2.9.0.post6`), ptoas 0.72, tilelang `0.1.15+cpu.git479d5cd1`",
         "(`pto-dev` checkout `479d5cd1`). `PTO_FLAGS=--pto-backend=vpto --pto-level=level3`",
@@ -125,7 +127,7 @@ def main() -> None:
             first = (row.get("error") or "").splitlines()[0][:400]
             lines.append(f"- `{row['family']}/{row['name']}`: {_cause(row)} {first}")
     text = "\n".join(lines) + "\n"
-    (ROOT / "REPORT.md").write_text(text)
+    REPORT.write_text(text)
     print(text)
 
 

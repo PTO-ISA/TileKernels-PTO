@@ -104,8 +104,8 @@ def _subset(rows: int, cols: int, vocab: int, gen: torch.Generator) -> torch.Ten
 
 def _sampler():
     _dev()
-    from vllm_kernels.asc import sampler as asc
-    from vllm_kernels.pto import sampler as pto
+    from deepinfer_kernels.asc import sampler as asc
+    from deepinfer_kernels.pto import sampler as pto
 
     return asc, pto
 
@@ -369,8 +369,8 @@ def prepare_finalize():
 
 def _sample_mods():
     _dev()
-    from vllm_kernels.asc import random_sampling as asc
-    from vllm_kernels.pto import random_sampling as pto
+    from deepinfer_kernels.asc import random_sampling as asc
+    from deepinfer_kernels.pto import random_sampling as pto
 
     return asc, pto
 
@@ -396,8 +396,8 @@ def _prepare_random(vocab: int):
 
 def _fused_mods():
     _dev()
-    from vllm_kernels.asc import fused_sample as asc
-    from vllm_kernels.pto import fused_sample as pto
+    from deepinfer_kernels.asc import fused_sample as asc
+    from deepinfer_kernels.pto import fused_sample as pto
 
     return asc, pto
 
@@ -471,8 +471,8 @@ def _prepare_fused(do_reject: bool):
 
 def _transform_mods():
     _dev()
-    from vllm_kernels.asc import fused_transform as asc
-    from vllm_kernels.pto import fused_transform as pto
+    from deepinfer_kernels.asc import fused_transform as asc
+    from deepinfer_kernels.pto import fused_transform as pto
 
     return asc, pto
 

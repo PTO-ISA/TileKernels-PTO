@@ -95,8 +95,8 @@ def _yoco_contrib_pad_len(seq_lens: list[int], keep_lens: list[int], cp_size: in
 
 
 def prepare_seqlens():
-    from vllm_kernels.asc.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as asc_factory
-    from vllm_kernels.pto.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as pto_factory
+    from deepinfer_kernels.asc.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as asc_factory
+    from deepinfer_kernels.pto.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as pto_factory
 
     torch.manual_seed(1)
     nextn, n_seq = 3, 1024
@@ -118,8 +118,8 @@ def prepare_seqlens():
 
 
 def prepare_swa():
-    from vllm_kernels.asc.swa_index import expand_swa_index_tl as asc_factory
-    from vllm_kernels.pto.swa_index import expand_swa_index_tl as pto_factory
+    from deepinfer_kernels.asc.swa_index import expand_swa_index_tl as asc_factory
+    from deepinfer_kernels.pto.swa_index import expand_swa_index_tl as pto_factory
 
     torch.manual_seed(2)
     num_tokens, width = 8192, 4096
@@ -145,8 +145,8 @@ def prepare_swa():
 
 
 def prepare_flash_mla():
-    from vllm_kernels.asc.flash_mla_utils import convert_kv_index_tl as asc_factory
-    from vllm_kernels.pto.flash_mla_utils import convert_kv_index_tl as pto_factory
+    from deepinfer_kernels.asc.flash_mla_utils import convert_kv_index_tl as asc_factory
+    from deepinfer_kernels.pto.flash_mla_utils import convert_kv_index_tl as pto_factory
 
     torch.manual_seed(3)
     b, s, k, n, block_size = 256, 1, 1024, 4096, 16
@@ -167,8 +167,8 @@ def prepare_flash_mla():
 
 
 def _prepare_gather(d: int, seed: int):
-    from vllm_kernels.asc.gather import gather_tl as asc_factory
-    from vllm_kernels.pto.gather import gather_tl as pto_factory
+    from deepinfer_kernels.asc.gather import gather_tl as asc_factory
+    from deepinfer_kernels.pto.gather import gather_tl as pto_factory
 
     torch.manual_seed(seed)
     n = m = 131072
@@ -210,8 +210,8 @@ def prepare_gather_small():
 
 
 def prepare_gather_engram():
-    from vllm_kernels.asc.gather_engram_tokens_zos import gather_engram_tokens_zos_tl as asc_factory
-    from vllm_kernels.pto.gather_engram_tokens_zos import gather_engram_tokens_zos_tl as pto_factory
+    from deepinfer_kernels.asc.gather_engram_tokens_zos import gather_engram_tokens_zos_tl as asc_factory
+    from deepinfer_kernels.pto.gather_engram_tokens_zos import gather_engram_tokens_zos_tl as pto_factory
 
     torch.manual_seed(6)
     n_seq, nextn, max_ngram_size, vocab = 1024, 5, 4, 100000
@@ -245,8 +245,8 @@ def prepare_gather_engram():
 
 
 def prepare_gather_ids():
-    from vllm_kernels.asc.gather_input_ids_zos import gather_input_ids_zos_tl as asc_factory
-    from vllm_kernels.pto.gather_input_ids_zos import gather_input_ids_zos_tl as pto_factory
+    from deepinfer_kernels.asc.gather_input_ids_zos import gather_input_ids_zos_tl as asc_factory
+    from deepinfer_kernels.pto.gather_input_ids_zos import gather_input_ids_zos_tl as pto_factory
 
     torch.manual_seed(7)
     n_seq, nextn = 1024, 7
@@ -276,8 +276,8 @@ def prepare_gather_ids():
 
 
 def prepare_kv_index_cat():
-    from vllm_kernels.asc.kv_index_cat import kv_index_cat_tl as asc_factory
-    from vllm_kernels.pto.kv_index_cat import kv_index_cat_tl as pto_factory
+    from deepinfer_kernels.asc.kv_index_cat import kv_index_cat_tl as asc_factory
+    from deepinfer_kernels.pto.kv_index_cat import kv_index_cat_tl as pto_factory
 
     torch.manual_seed(8)
     total_q, window, topk = 16384, 128, 1024
@@ -306,8 +306,8 @@ def prepare_kv_index_cat():
 
 
 def _prepare_kv_index(has_block_tables: bool, index_length: int, seed: int):
-    from vllm_kernels.asc.get_kv_index import load_kv_index_tl as asc_factory
-    from vllm_kernels.pto.get_kv_index import load_kv_index_tl as pto_factory
+    from deepinfer_kernels.asc.get_kv_index import load_kv_index_tl as asc_factory
+    from deepinfer_kernels.pto.get_kv_index import load_kv_index_tl as pto_factory
 
     torch.manual_seed(seed)
     n, block_size = 1024, 128
@@ -346,8 +346,8 @@ def prepare_kv_paged():
 
 
 def prepare_dflash_input():
-    from vllm_kernels.asc.get_kv_index import get_fused_dflash_get_input_tl as asc_factory
-    from vllm_kernels.pto.get_kv_index import get_fused_dflash_get_input_tl as pto_factory
+    from deepinfer_kernels.asc.get_kv_index import get_fused_dflash_get_input_tl as asc_factory
+    from deepinfer_kernels.pto.get_kv_index import get_fused_dflash_get_input_tl as pto_factory
 
     torch.manual_seed(11)
     real_cnt, dflash_block_size, swa_block_size = 1024, 5, 512
@@ -392,8 +392,8 @@ def prepare_dflash_input():
 
 
 def prepare_schedule():
-    from vllm_kernels.asc.schedule_mtp_varlen import compute_seqlens_q_by_confidence_rates_tl as asc_factory
-    from vllm_kernels.pto.schedule_mtp_varlen import compute_seqlens_q_by_confidence_rates_tl as pto_factory
+    from deepinfer_kernels.asc.schedule_mtp_varlen import compute_seqlens_q_by_confidence_rates_tl as asc_factory
+    from deepinfer_kernels.pto.schedule_mtp_varlen import compute_seqlens_q_by_confidence_rates_tl as pto_factory
 
     torch.manual_seed(12)
     num_seqs, nextn = 1024, 7
@@ -416,8 +416,8 @@ def prepare_schedule():
 
 
 def _prepare_mtp(vocab: int, has_index: bool, has_confidence: bool, seed: int):
-    from vllm_kernels.asc.store_mtp_info import store_mtp_info_tl as asc_factory
-    from vllm_kernels.pto.store_mtp_info import store_mtp_info_tl as pto_factory
+    from deepinfer_kernels.asc.store_mtp_info import store_mtp_info_tl as asc_factory
+    from deepinfer_kernels.pto.store_mtp_info import store_mtp_info_tl as pto_factory
 
     torch.manual_seed(seed)
     req_cnt, nextn = 128, 4
@@ -464,8 +464,8 @@ def prepare_mtp_index():
 
 
 def prepare_dflash_copy():
-    from vllm_kernels.asc.dflash_copy import copy_dflash_decode_input_tl as asc_factory
-    from vllm_kernels.pto.dflash_copy import copy_dflash_decode_input_tl as pto_factory
+    from deepinfer_kernels.asc.dflash_copy import copy_dflash_decode_input_tl as asc_factory
+    from deepinfer_kernels.pto.dflash_copy import copy_dflash_decode_input_tl as pto_factory
 
     torch.manual_seed(15)
     src_n, dst_n = 257, 512
@@ -514,11 +514,11 @@ def prepare_dflash_copy():
 
 def _prepare_state(cache_to_tensor: bool, seed: int):
     if cache_to_tensor:
-        from vllm_kernels.asc.state_cache import select_state_slice_tl as asc_factory
-        from vllm_kernels.pto.state_cache import select_state_slice_tl as pto_factory
+        from deepinfer_kernels.asc.state_cache import select_state_slice_tl as asc_factory
+        from deepinfer_kernels.pto.state_cache import select_state_slice_tl as pto_factory
     else:
-        from vllm_kernels.asc.state_cache import load_state_to_cache_tl as asc_factory
-        from vllm_kernels.pto.state_cache import load_state_to_cache_tl as pto_factory
+        from deepinfer_kernels.asc.state_cache import load_state_to_cache_tl as asc_factory
+        from deepinfer_kernels.pto.state_cache import load_state_to_cache_tl as pto_factory
 
     torch.manual_seed(seed)
     feature_dim = 448 + 64 * 2 + 8
@@ -553,8 +553,8 @@ def prepare_load_state():
 
 
 def prepare_bitmask():
-    from vllm_kernels.asc.structure_output import apply_token_bitmask_by_step_inplace_tl as asc_factory
-    from vllm_kernels.pto.structure_output import apply_token_bitmask_by_step_inplace_tl as pto_factory
+    from deepinfer_kernels.asc.structure_output import apply_token_bitmask_by_step_inplace_tl as asc_factory
+    from deepinfer_kernels.pto.structure_output import apply_token_bitmask_by_step_inplace_tl as pto_factory
 
     torch.manual_seed(18)
     num_requests, vocab, step = 512, 129280, 0
@@ -578,8 +578,8 @@ def prepare_bitmask():
 
 
 def prepare_sum_probs():
-    from vllm_kernels.asc.sum_smaller_probs import sum_smaller_probs_tl as asc_factory
-    from vllm_kernels.pto.sum_smaller_probs import sum_smaller_probs_tl as pto_factory
+    from deepinfer_kernels.asc.sum_smaller_probs import sum_smaller_probs_tl as asc_factory
+    from deepinfer_kernels.pto.sum_smaller_probs import sum_smaller_probs_tl as pto_factory
 
     torch.manual_seed(19)
     batch, vocab = 512, 129280
@@ -600,8 +600,8 @@ def prepare_sum_probs():
 
 
 def prepare_cp_mirror():
-    from vllm_kernels.asc.prepare_cp_mirror import prepare_cp_mirror_tl as asc_factory
-    from vllm_kernels.pto.prepare_cp_mirror import prepare_cp_mirror_tl as pto_factory
+    from deepinfer_kernels.asc.prepare_cp_mirror import prepare_cp_mirror_tl as asc_factory
+    from deepinfer_kernels.pto.prepare_cp_mirror import prepare_cp_mirror_tl as pto_factory
 
     torch.manual_seed(20)
     # Largest prepare bench: batch 4096, ratios (1, 2), cp_size 8, last rank.
@@ -644,8 +644,8 @@ def prepare_cp_mirror():
 
 
 def prepare_yoco():
-    from vllm_kernels.asc.prepare_cp_mirror import yoco_cp_boundary_fused_tl as asc_factory
-    from vllm_kernels.pto.prepare_cp_mirror import yoco_cp_boundary_fused_tl as pto_factory
+    from deepinfer_kernels.asc.prepare_cp_mirror import yoco_cp_boundary_fused_tl as asc_factory
+    from deepinfer_kernels.pto.prepare_cp_mirror import yoco_cp_boundary_fused_tl as pto_factory
 
     torch.manual_seed(21)
     # Bench shape (256, 500) from _CP_MIRROR_BENCH_SHAPES. cp_size 4, keep = seqlen.
@@ -678,8 +678,8 @@ def prepare_yoco():
 
 
 def prepare_block_tables():
-    from vllm_kernels.asc.prepare_v4_decode_metadata import copy_block_tables_tl as asc_factory
-    from vllm_kernels.pto.prepare_v4_decode_metadata import copy_block_tables_tl as pto_factory
+    from deepinfer_kernels.asc.prepare_v4_decode_metadata import copy_block_tables_tl as asc_factory
+    from deepinfer_kernels.pto.prepare_v4_decode_metadata import copy_block_tables_tl as pto_factory
 
     torch.manual_seed(22)
     n_seq, max_seqlen_q, max_num_blocks = 256, 8, 4096
@@ -703,8 +703,8 @@ def prepare_block_tables():
 
 
 def prepare_v4_meta():
-    from vllm_kernels.asc.prepare_v4_decode_metadata import prepare_v4_decode_metadata_tl as asc_factory
-    from vllm_kernels.pto.prepare_v4_decode_metadata import prepare_v4_decode_metadata_tl as pto_factory
+    from deepinfer_kernels.asc.prepare_v4_decode_metadata import prepare_v4_decode_metadata_tl as asc_factory
+    from deepinfer_kernels.pto.prepare_v4_decode_metadata import prepare_v4_decode_metadata_tl as pto_factory
 
     torch.manual_seed(23)
     # Largest bench n_seq. Ratios match the bench: ca=sparse=(1, 2), dense empty.

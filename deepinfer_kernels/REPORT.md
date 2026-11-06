@@ -1,7 +1,8 @@
 # ASC vs PTO on-device report
 
 Worktree `vllm-kernels-ondevice` from TileKernels-PTO `vmi-impl`.
-Kernels are the DeepInfer `tilelang_ops/asc` set, launched on all vector cores.
+Kernels are the DeepInfer `tilelang_ops/asc` set in package `deepinfer_kernels`, launched on all vector cores.
+This report is `deepinfer_kernels/REPORT.md`.
 Toolchain: CANN 9.2.0 (`/usr/local/Ascend/canns/9.2.0/cann-9.2.0/set_env.sh`),
 conda `cann91_dev` (`torch-npu==2.9.0.post6`), ptoas 0.72, tilelang `0.1.15+cpu.git479d5cd1`
 (`pto-dev` checkout `479d5cd1`). `PTO_FLAGS=--pto-backend=vpto --pto-level=level3`

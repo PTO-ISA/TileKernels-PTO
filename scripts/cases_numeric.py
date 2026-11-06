@@ -16,21 +16,21 @@ from harness import BenchCase
 
 import torch
 
-from vllm_kernels.asc import candidate_blocks as asc_candidate
-from vllm_kernels.asc import compress as asc_compress
-from vllm_kernels.asc import dflash as asc_dflash
-from vllm_kernels.asc import image_embed_ops as asc_image
-from vllm_kernels.asc import load_paged_kv_cache as asc_load
-from vllm_kernels.asc import norm as asc_norm
-from vllm_kernels.asc import store_kv_cache as asc_store
-from vllm_kernels.common import BF16_KV_FORMAT, MXFP8_INDEX_KV_FORMAT, V41_FORMAT, V41_FP4_FORMAT
-from vllm_kernels.pto import candidate_blocks as pto_candidate
-from vllm_kernels.pto import compress as pto_compress
-from vllm_kernels.pto import dflash as pto_dflash
-from vllm_kernels.pto import image_embed_ops as pto_image
-from vllm_kernels.pto import load_paged_kv_cache as pto_load
-from vllm_kernels.pto import norm as pto_norm
-from vllm_kernels.pto import store_kv_cache as pto_store
+from deepinfer_kernels.asc import candidate_blocks as asc_candidate
+from deepinfer_kernels.asc import compress as asc_compress
+from deepinfer_kernels.asc import dflash as asc_dflash
+from deepinfer_kernels.asc import image_embed_ops as asc_image
+from deepinfer_kernels.asc import load_paged_kv_cache as asc_load
+from deepinfer_kernels.asc import norm as asc_norm
+from deepinfer_kernels.asc import store_kv_cache as asc_store
+from deepinfer_kernels.common import BF16_KV_FORMAT, MXFP8_INDEX_KV_FORMAT, V41_FORMAT, V41_FP4_FORMAT
+from deepinfer_kernels.pto import candidate_blocks as pto_candidate
+from deepinfer_kernels.pto import compress as pto_compress
+from deepinfer_kernels.pto import dflash as pto_dflash
+from deepinfer_kernels.pto import image_embed_ops as pto_image
+from deepinfer_kernels.pto import load_paged_kv_cache as pto_load
+from deepinfer_kernels.pto import norm as pto_norm
+from deepinfer_kernels.pto import store_kv_cache as pto_store
 
 # Test list in DeepInfer tilelang_ops/norm.py (_HIDDEN_SIZES and the benchmark
 # grid). 7168 is the largest hidden, and it is a multiple of 128.

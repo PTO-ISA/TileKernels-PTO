@@ -10,12 +10,12 @@ import os
 import torch
 import torch_npu  # noqa: F401
 
-from vllm_kernels.asc.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as asc_seqlens
-from vllm_kernels.asc.store_mtp_info import store_mtp_info_tl as asc_mtp
-from vllm_kernels.asc.swa_index import expand_swa_index_tl as asc_swa
-from vllm_kernels.pto.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as pto_seqlens
-from vllm_kernels.pto.store_mtp_info import store_mtp_info_tl as pto_mtp
-from vllm_kernels.pto.swa_index import expand_swa_index_tl as pto_swa
+from deepinfer_kernels.asc.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as asc_seqlens
+from deepinfer_kernels.asc.store_mtp_info import store_mtp_info_tl as asc_mtp
+from deepinfer_kernels.asc.swa_index import expand_swa_index_tl as asc_swa
+from deepinfer_kernels.pto.compute_seqlens_k_zos import compute_seqlens_k_zos_tl as pto_seqlens
+from deepinfer_kernels.pto.store_mtp_info import store_mtp_info_tl as pto_mtp
+from deepinfer_kernels.pto.swa_index import expand_swa_index_tl as pto_swa
 
 
 def _device() -> int:
