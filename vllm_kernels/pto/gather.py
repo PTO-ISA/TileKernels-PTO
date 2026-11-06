@@ -6,7 +6,6 @@ import torch
 from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
 
-
 @tilelang.jit(
     target="pto",
     out_idx=None,
@@ -54,12 +53,15 @@ def gather_tl(D: int, dtype: torch.dtype, index_dtype: torch.dtype, x_stride: in
                 for blk in T.Persistent([T.ceildiv(m, bm)], num_cores, pid, group_size=1, num_stages=num_stages):
                     row0 = blk * bm
                     rem = T.min(bm, m - row0)
-                    # Initialize the entire tile.
+                    # Initialize the entire tile. PTO rejects the ASC scalar
+                    # T.Parallel fill (it writes a local.var). A 256-lane
+                    # int8 vstore is the same zeroing of the padded row.
                     with T.SimdVF():
-                        zero = V.vbrc(T.int8(0), size=256)
+                        zero = V.vbrc(T.cast(0, dtype), size=256)
+                        mask = V.create_mask(256, size=256)
                         for row in T.serial(bm):
                             for col in T.serial(d_simd // 256):
-                                V.vstore(zero, stage[row, col * 256])
+                                V.vstore(zero, stage[row, col * 256], mask)
                     # per-row dynamic-index MTE reads (index as scalar GM load)
                     for b in T.serial(bm):
                         if b < rem:

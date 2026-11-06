@@ -4,8 +4,75 @@ import tile_kernels
 import tilelang
 import tilelang.ascend.language as T
 from tilelang.ascend.language import vmi as V
+from tvm.script.ir_builder import tirx as _tir_builder
 
 from ..common import DRAFT_PROB_PENALTY
+
+
+def _store_lane(buf, value) -> None:
+    """Store a 1-lane scalar. Assignment in a helper rebinds the Python name."""
+    _tir_builder.buffer_store(buf, value, 0)
+
+
+def _narrow_bounds(hit, next_bound, j, lo, hi, mass0, mass1, count0, count1, quartiles_ub, sums_ub, counts_ub) -> None:
+    """Apply one quartile hit. Called from inside the flag branches so the mask does not escape an If."""
+    _store_lane(lo, V.vsel(hit, V.vload(quartiles_ub[j], size=1), lo[0]))
+    _store_lane(hi, V.vsel(hit, next_bound, hi[0]))
+    _store_lane(mass0, V.vsel(hit, V.vload(sums_ub[3 + j], size=1), mass0[0]))
+    _store_lane(count0, V.vsel(hit, V.vload(counts_ub[3 + j], size=1), count0[0]))
+    _store_lane(mass1, V.vsel(hit, V.vload(sums_ub[4 + j], size=1), mass1[0]))
+    _store_lane(count1, V.vsel(hit, V.vload(counts_ub[4 + j], size=1), count1[0]))
+
+
+def _run_quartile_search(top_p_active, top_k_active, top_p_only, bounds_ub, quartiles_ub, sums_ub, counts_ub, vocab_size, bd):
+    """Search one row. Slots are allocated here so the prim_func rewriter cannot turn them into loads."""
+    one = V.create_mask(1, size=1)
+    lo = V.alloc_var(T.float32, size=1)
+    hi = V.alloc_var(T.float32, size=1)
+    mass0 = V.alloc_var(T.float32, size=1)
+    mass1 = V.alloc_var(T.float32, size=1)
+    count0 = V.alloc_var(T.int32, size=1)
+    count1 = V.alloc_var(T.int32, size=1)
+    _store_lane(lo, V.vload(bounds_ub[0], size=1))
+    _store_lane(hi, V.vload(quartiles_ub[0], size=1))
+    _store_lane(mass0, V.vload(sums_ub[2], size=1))
+    _store_lane(mass1, V.vload(sums_ub[3], size=1))
+    _store_lane(count0, V.vload(counts_ub[2], size=1))
+    _store_lane(count1, V.vload(counts_ub[3], size=1))
+    for j in range(3):
+        p_hit = V.vcmp(V.vload(sums_ub[3 + j], size=1), V.vload(sums_ub[1], size=1), one, "ge")
+        k_hit = V.vcmp(V.vload(counts_ub[3 + j], size=1), V.vload(counts_ub[0], size=1), one, "ge")
+        next_bound = V.vload(quartiles_ub[j + 1], size=1) if j < 2 else V.vload(bounds_ub[1], size=1)
+        with _tir_builder.If(top_p_active):
+            with _tir_builder.Then():
+                with _tir_builder.If(top_k_active):
+                    with _tir_builder.Then():
+                        _narrow_bounds(
+                            V.vor(p_hit, k_hit), next_bound, j, lo, hi, mass0, mass1, count0, count1, quartiles_ub, sums_ub, counts_ub
+                        )
+                    with _tir_builder.Else():
+                        _narrow_bounds(p_hit, next_bound, j, lo, hi, mass0, mass1, count0, count1, quartiles_ub, sums_ub, counts_ub)
+            with _tir_builder.Else():
+                with _tir_builder.If(top_k_active):
+                    with _tir_builder.Then():
+                        _narrow_bounds(k_hit, next_bound, j, lo, hi, mass0, mass1, count0, count1, quartiles_ub, sums_ub, counts_ub)
+    V.vstore(lo[0], bounds_ub[0])
+    V.vstore(hi[0], bounds_ub[1])
+    V.vstore(mass0[0], sums_ub[2])
+    V.vstore(count0[0], counts_ub[2])
+    V.vstore(mass1[0], sums_ub[6])
+    V.vstore(count1[0], counts_ub[6])
+    if vocab_size > bd:
+        with _tir_builder.If(top_p_only):
+            with _tir_builder.Then():
+                excess = V.vsub(mass0[0], V.vload(sums_ub[1], size=1), one)
+                valid_excess = V.vand(
+                    V.vcmps(excess, T.float32(0.0), one, "ge"), V.vcmp(excess, lo[0], one, "lt")
+                )
+                done = V.vsel(valid_excess, V.vbrc(T.float32(1.0), size=1), V.vbrc(T.float32(0.0), size=1))
+                V.vstore(done, bounds_ub[5])
+
+
 from .random_sampling import Config, accumulate, draw_random, inclusive_scan, sample_offset, sample_select
 
 
@@ -387,48 +454,19 @@ def fused_sample_tl(
                                 # TODO: optimize topk case later
                                 # 收窄搜索区间，检查 top-p 提前结束条件。
                                 with T.SimdVF():
-                                    one = V.create_mask(1, size=1)
-                                    lo = V.alloc_var(T.float32, size=1)
-                                    hi = V.alloc_var(T.float32, size=1)
-                                    mass = V.alloc_local((2,), V.vreg(1, T.float32))
-                                    count = V.alloc_local((2,), V.vreg(1, T.int32))
-                                    lo = V.vload(bounds_ub[0], size=1)
-                                    hi = V.vload(quartiles_ub[0], size=1)
-                                    mass[0] = V.vload(sums_ub[2], size=1)
-                                    mass[1] = V.vload(sums_ub[3], size=1)
-                                    count[0] = V.vload(counts_ub[2], size=1)
-                                    count[1] = V.vload(counts_ub[3], size=1)
-                                    for j in T.unroll(3, explicit=True):
-                                        hit = V.vnot(one)
-                                        if top_p_active:
-                                            hit = V.vcmp(V.vload(sums_ub[3 + j], size=1), V.vload(sums_ub[1], size=1), one, "ge")
-                                        if top_k_active:
-                                            hit_k = V.vcmp(
-                                                V.vload(counts_ub[3 + j], size=1), V.vload(counts_ub[0], size=1), one, "ge"
-                                            )
-                                            hit = V.vor(hit, hit_k, one)
-                                        lo = V.vsel(hit, V.vload(quartiles_ub[j], size=1), lo)
-                                        next_bound = V.vload(quartiles_ub[j + 1], size=1) if j < 2 else V.vload(bounds_ub[1], size=1)
-                                        hi = V.vsel(hit, next_bound, hi)
-                                        mass[0] = V.vsel(hit, V.vload(sums_ub[3 + j], size=1), mass[0])
-                                        count[0] = V.vsel(hit, V.vload(counts_ub[3 + j], size=1), count[0])
-                                        mass[1] = V.vsel(hit, V.vload(sums_ub[4 + j], size=1), mass[1])
-                                        count[1] = V.vsel(hit, V.vload(counts_ub[4 + j], size=1), count[1])
-                                    V.vstore(lo, bounds_ub[0])
-                                    V.vstore(hi, bounds_ub[1])
-                                    V.vstore(mass[0], sums_ub[2])
-                                    V.vstore(count[0], counts_ub[2])
-                                    V.vstore(mass[1], sums_ub[6])
-                                    V.vstore(count[1], counts_ub[6])
-                                    if vocab_size > BD and top_p_only:
-                                        excess = V.vsub(mass[0], V.vload(sums_ub[1], size=1), one)
-                                        valid_excess = V.vand(
-                                            V.vcmps(excess, T.float32(0.0), one, "ge"), V.vcmp(excess, lo, one, "lt"), one
-                                        )
-                                        done = V.vsel(
-                                            valid_excess, V.vbrc(T.float32(1.0), size=1), V.vbrc(T.float32(0.0), size=1)
-                                        )
-                                        V.vstore(done, bounds_ub[5])
+                                    # Allocating the slots in the prim_func makes the
+                                    # rewriter pass BufferLoads into buffer_store.
+                                    _run_quartile_search(
+                                        top_p_active,
+                                        top_k_active,
+                                        top_p_only,
+                                        bounds_ub,
+                                        quartiles_ub,
+                                        sums_ub,
+                                        counts_ub,
+                                        vocab_size,
+                                        BD,
+                                    )
                                 if vocab_size > BD and top_p_only:
                                     search_active = T.reinterpret(bounds_ub[5], T.int32) == 0
                                 # 在 lo 处已不满足的目标，后续无需再统计。
@@ -473,7 +511,9 @@ def fused_sample_tl(
                                 for v in T.serial(num_vecs):
                                     base = v * VL
                                     candidate = V.vcmp(V.vload(logits_ub[base], size=VL), boundary, full, "eq")
-                                    V.vstore(V.vcvt(V.vsel(candidate, one_i32, zero), "uint16", rounding="Z"), count_prefix_ub[base], full)
+                                    # Build the 0/1 prefix as uint32. A signed source cannot be extui'd.
+                                    prefix = V.vsel(candidate, V.vbrc(T.uint32(1), size=VL), V.vbrc(T.uint32(0), size=VL))
+                                    V.vstore(V.vcvt(prefix, "uint16"), count_prefix_ub[base], full)
                                     count = V.vsel(candidate, V.vadd(count, one_i32, full), count)
                                 V.vstore(V.vcadd(count, full), counts_ub[3])
                         # 构造保留 mask，累计保留概率和并扣减同值项配额。
@@ -490,35 +530,56 @@ def fused_sample_tl(
                             boundary = V.vbrc(V.vload(bounds_ub[0], size=1), size=VL)
                             kept_sum = V.alloc_var(T.float32, size=VL)
                             kept_sum = V.vbrc(T.float32(0.0), size=VL)
-                            lane_u = V.vinterpret_cast(V.vci(T.int32(0), size=VL), "uint32")
+                            lane_u = V.vci(T.uint32(0), size=VL)
                             bit = V.vshl(
                                 V.vbrc(T.uint32(1), size=VL), V.vand(lane_u, V.vbrc(T.uint32(31), size=VL), full), full
                             )
                             low_lanes = V.vcmps(lane_u, T.uint32(32), full, "lt")
                             zero_u = V.vbrc(T.uint32(0), size=VL)
-                            for mode in T.unroll(3, explicit=True):
-                                if chunk_state == mode:
-                                    remaining = V.vbrc(V.vload(counts_ub[7], size=1), size=VL) if mode == 2 else V.vbrc(T.int32(0), size=VL)
-                                    for v in T.serial(num_vecs):
-                                        base = v * VL
-                                        prob = V.vload(logits_ub[base], size=VL)
-                                        if mode == 1:
-                                            keep = V.vcmp(prob, boundary, full, "ge")
-                                        else:
-                                            keep = V.vcmp(prob, boundary, full, "gt")
-                                        if mode == 2:
-                                            candidate = V.vcmp(prob, boundary, full, "eq")
-                                            rank = V.vcvt(V.vload(count_prefix_ub[base], size=VL), "int32")
-                                            selected = V.vand(candidate, V.vcmp(rank, remaining, full, "le"), full)
-                                            keep = V.vor(keep, selected, full)
-                                        # 4-word slot holds two 32-bit masks. Predicate spill is 0/1 bits.
-                                        flag = V.vsel(keep, bit, zero_u)
-                                        low_word = V.vcadd(V.vsel(low_lanes, flag, zero_u), full)
-                                        high_word = V.vcadd(V.vsel(low_lanes, zero_u, flag), full)
-                                        slot = (chunk_base + base) // VL * MASK_WORDS_PER_VREG
-                                        V.vstore(V.vinterpret_cast(low_word, "int32"), top_p_mask_ub[slot])
-                                        V.vstore(V.vinterpret_cast(high_word, "int32"), top_p_mask_ub[slot + 1])
-                                        kept_sum = V.vsel(keep, V.vadd(kept_sum, prob, full), kept_sum)
+                            # mode is a Python literal in each arm. A TIR loop
+                            # index would make the compare a device If, and the
+                            # predicate would not dominate the uses after it.
+                            if chunk_state == 0:
+                                for v in T.serial(num_vecs):
+                                    base = v * VL
+                                    prob = V.vload(logits_ub[base], size=VL)
+                                    keep = V.vcmp(prob, boundary, full, "gt")
+                                    flag = V.vsel(keep, bit, zero_u)
+                                    low_word = V.vcadd(V.vsel(low_lanes, flag, zero_u), full)
+                                    high_word = V.vcadd(V.vsel(low_lanes, zero_u, flag), full)
+                                    slot = (chunk_base + base) // VL * MASK_WORDS_PER_VREG
+                                    V.vstore(V.vinterpret_cast(low_word, "int32"), top_p_mask_ub[slot])
+                                    V.vstore(V.vinterpret_cast(high_word, "int32"), top_p_mask_ub[slot + 1])
+                                    kept_sum = V.vsel(keep, V.vadd(kept_sum, prob, full), kept_sum)
+                            if chunk_state == 1:
+                                for v in T.serial(num_vecs):
+                                    base = v * VL
+                                    prob = V.vload(logits_ub[base], size=VL)
+                                    keep = V.vcmp(prob, boundary, full, "ge")
+                                    flag = V.vsel(keep, bit, zero_u)
+                                    low_word = V.vcadd(V.vsel(low_lanes, flag, zero_u), full)
+                                    high_word = V.vcadd(V.vsel(low_lanes, zero_u, flag), full)
+                                    slot = (chunk_base + base) // VL * MASK_WORDS_PER_VREG
+                                    V.vstore(V.vinterpret_cast(low_word, "int32"), top_p_mask_ub[slot])
+                                    V.vstore(V.vinterpret_cast(high_word, "int32"), top_p_mask_ub[slot + 1])
+                                    kept_sum = V.vsel(keep, V.vadd(kept_sum, prob, full), kept_sum)
+                            if chunk_state == 2:
+                                remaining = V.vbrc(V.vload(counts_ub[7], size=1), size=VL)
+                                for v in T.serial(num_vecs):
+                                    base = v * VL
+                                    prob = V.vload(logits_ub[base], size=VL)
+                                    candidate = V.vcmp(prob, boundary, full, "eq")
+                                    rank_u = V.vcvt(V.vload(count_prefix_ub[base], size=VL), "uint32")
+                                    rank = V.vinterpret_cast(rank_u, "int32")
+                                    selected = V.vand(candidate, V.vcmp(rank, remaining, full, "le"))
+                                    keep = V.vor(V.vcmp(prob, boundary, full, "gt"), selected)
+                                    flag = V.vsel(keep, bit, zero_u)
+                                    low_word = V.vcadd(V.vsel(low_lanes, flag, zero_u), full)
+                                    high_word = V.vcadd(V.vsel(low_lanes, zero_u, flag), full)
+                                    slot = (chunk_base + base) // VL * MASK_WORDS_PER_VREG
+                                    V.vstore(V.vinterpret_cast(low_word, "int32"), top_p_mask_ub[slot])
+                                    V.vstore(V.vinterpret_cast(high_word, "int32"), top_p_mask_ub[slot + 1])
+                                    kept_sum = V.vsel(keep, V.vadd(kept_sum, prob, full), kept_sum)
                             total = V.vadd(V.vload(mass_ub[0], size=1), V.vcadd(kept_sum, full, reassoc=True), one)
                             V.vstore(total, mass_ub[0])
                             if not partition_done:
@@ -560,7 +621,7 @@ def fused_sample_tl(
                             lse0_vec = V.vbrc(lse0, size=VL)
                             log_kept = V.vbrc(V.vload(lse0_ub[0], size=1), size=VL)
                             normalized = V.alloc_var(T.float32, size=VL)
-                            lane_u = V.vinterpret_cast(V.vci(T.int32(0), size=VL), "uint32")
+                            lane_u = V.vci(T.uint32(0), size=VL)
                             bit = V.vshl(
                                 V.vbrc(T.uint32(1), size=VL), V.vand(lane_u, V.vbrc(T.uint32(31), size=VL), full), full
                             )

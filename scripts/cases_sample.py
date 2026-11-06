@@ -409,7 +409,7 @@ def _prepare_fused(do_reject: bool):
         assert vocab % 64 == 0
         gen = torch.Generator().manual_seed(31 + int(do_reject))
         logits = torch.randn(batch, vocab, generator=gen).contiguous()
-        assert logits.stride(1) % 8 == 0
+        assert logits.stride(0) % 8 == 0
         temperatures = torch.ones(batch)
         top_p = torch.full((batch,), 0.95)
         top_k = torch.full((batch,), 128, dtype=torch.int32)
@@ -427,7 +427,7 @@ def _prepare_fused(do_reject: bool):
             # the reads; the prim_func still lists every buffer.
             draft_lp = torch.zeros(batch, vocab)
             draft_ids = torch.zeros(batch, dtype=torch.int32)
-        assert draft_lp.stride(1) % 8 == 0
+        assert draft_lp.stride(0) % 8 == 0
         read_rows = torch.arange(batch, dtype=torch.int32)
         accept = torch.zeros(batch, dtype=torch.bool)
         draft_selected = torch.zeros(batch)

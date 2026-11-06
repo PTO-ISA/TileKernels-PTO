@@ -1,0 +1,1 @@
+{"family": "gather_engram", "name": "n1024_nextn5", "device": 1, "notes": "max_ngram_size 4, old_ratio 0.9, vocab 100000", "correct": true, "compared": "out_ngram_token_ids", "io_bytes": 593724, "asc_us": 8.469299999999999, "pto_us": 8.883500000000002, "ratio": 0.9533742331288341, "asc_gbs": 70.10307817647268, "pto_gbs": 66.83446839646535}

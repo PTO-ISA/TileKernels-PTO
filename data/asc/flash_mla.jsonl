@@ -1,0 +1,1 @@
+{"family": "flash_mla", "name": "b256_k1024_full", "device": 1, "notes": "in-place topk; full context; block_size 16", "correct": true, "compared": "topk_idxs", "io_bytes": 6292480, "asc_us": 7.0237, "pto_us": 7.462899999999999, "ratio": 0.9411488831419422, "asc_gbs": 895.8924783233908, "pto_gbs": 843.168205389326}

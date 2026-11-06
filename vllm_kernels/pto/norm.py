@@ -103,7 +103,9 @@ def norm_tl(
     rows_per_block = 32 if transpose_sf else rows_per_tile
     # Match hai-llm's four interleaved FMA chains without changing row tiling.
     num_reduction_accumulators = 4
-    rows_per_simd = min(8 if hidden_size == 512 else 4, rows_per_tile)
+    # One row per VF step. Unrolling the ASC row group duplicates the
+    # compensated rstd until vpto's layout search cannot finish.
+    rows_per_simd = 1
     rstd_impl = make_rstd_impl(hidden_size, eps)
     num_packs_per_row = align(num_groups // 2, 128 // rows_per_block)  # pad so each transpose iteration fills a 128-lane SIMD vector
     quant_rows_per_simd = rows_per_simd if do_fp8_cast else 0
@@ -225,16 +227,21 @@ def norm_tl(
     ) -> None:
         if use_bf16_quant:
             with T.SimdVF():
-                mask256 = V.create_mask(256, size=256)
+                mask128 = V.create_mask(128, size=128)
                 mask64 = V.create_mask(64, size=64)
-                mask8 = V.create_mask(8, size=8)
                 for row_offset in T.serial(num_rows):
                     row = row_start + row_offset
                     for tile in T.serial(hidden_size // 256):
                         column = tile * 256
-                        values = V.vcvt(V.vload(source[row, column], size=256), "float32")
-                        reduced = V.vcmax(V.vabs(values, mask256), mask256, group=8)
-                        V.vstore(reduced, amax[row_offset, tile * 8], mask8)
+                        # Two 128-lane halves. A 256-lane f32 vector is not a
+                        # full physical chunk and comes back as NaNs.
+                        for half in T.unroll(2, explicit=True):
+                            col = column + half * 128
+                            values = V.vcvt(V.vload(source[row, col], size=128), "float32")
+                            reduced = V.vcmax(V.vabs(values, mask128), mask128, group=4)
+                            # Four live lanes in a 128-wide register. A size-4 mask
+                            # faults; an unmasked store writes the whole register.
+                            V.vstore(reduced, amax[row_offset, tile * 8 + half * 4], V.create_mask(4, size=128))
                 T.simd.mem_bar("VST_VLD")
                 for row_offset in T.serial(num_rows):
                     sf_row = sf_row_start + row_offset
@@ -255,16 +262,19 @@ def norm_tl(
                     row = row_start + row_offset
                     for tile in T.serial(hidden_size // 256):
                         column = tile * 256
-                        values = V.vcvt(V.vload(source[row, column], size=256), "float32")
-                        slots = V.vcvt(V.vload(inverse_sf[row_offset, tile * 8], size=8, stride=1, group=8), "float32")
-                        inverse = V.vbrc(slots, size=256, group=8)
-                        quant = V.vmul(values, inverse, mask256)
-                        V.vstore(V.vcvt(quant, "float8_e4m3fn", rounding="R", saturate="SAT"), output[row, column], mask256)
+                        for half in T.unroll(2, explicit=True):
+                            col = column + half * 128
+                            values = V.vcvt(V.vload(source[row, col], size=128), "float32")
+                            # Broadcast the bf16 slots first. Converting the
+                            # grouped load before vbrc is not a legal group input.
+                            slots = V.vload(inverse_sf[row_offset, tile * 8 + half * 4], size=4, stride=1, group=4)
+                            inverse = V.vcvt(V.vbrc(slots, size=128, group=4), "float32")
+                            quant = V.vmul(values, inverse, mask128)
+                            V.vstore(V.vcvt(quant, "float8_e4m3fn", rounding="R", saturate="SAT"), output[row, col], mask128)
         else:
             with T.SimdVF():
                 mask128 = V.create_mask(128, size=128)
                 mask64 = V.create_mask(64, size=64)
-                mask4 = V.create_mask(4, size=4)
                 for row_offset in T.serial(num_rows):
                     row = row_start + row_offset
                     for pair in T.serial(hidden_size // 128):
@@ -274,7 +284,7 @@ def norm_tl(
                         else:
                             values = V.vload(source[row, column], size=128)
                         reduced = V.vcmax(V.vabs(values, mask128), mask128, group=4)
-                        V.vstore(reduced, amax[row_offset, group], mask4)
+                        V.vstore(reduced, amax[row_offset, group], V.create_mask(4, size=128))
                 T.simd.mem_bar("VST_VLD")
                 for row_offset in T.serial(num_rows):
                     sf_row = sf_row_start + row_offset

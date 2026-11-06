@@ -50,7 +50,7 @@ def expand_swa_index_tl(width: int) -> Any:
                         len2 = V.vbrc(V.vload(pivots_ub[row, 3], size=1), size=64)
                         end2 = V.vadd(len1, len2, full)
                         base2 = V.vsub(offset2, len1, full)
-                        for chunk in T.serial(cols_per_tile // 64):
+                        for chunk in T.unroll(cols_per_tile // 64, explicit=True):
                             col = V.vci(col0 + chunk * 64, size=64)
                             first = V.vcmp(col, len1, full, "lt")
                             inside = V.vcmp(col, end2, full, "lt")

@@ -35,7 +35,9 @@ def candidate_block_max_tl(max_model_len: int, block_size: int) -> Any:
         valid_lens: T.Tensor((num_rows,), T.int32),
         block_scores: T.StridedTensor((num_rows, num_blocks), (score_stride, 1), T.bfloat16),
         valid_blocks: T.Tensor((valid_blocks_size,), T.int32),
-        task_records: T.Tensor((task_capacity,), T.uint64),
+        # Two extents, each a host Var or a constant. A product extent stays a
+        # TIR Mul, and the PTO wrapper passes that through to torch.empty.
+        task_records: T.Tensor((num_rows, tasks_per_row), T.uint64),
         num_tasks: T.Tensor((1,), T.int32),
         core_offsets: T.Tensor((num_cores * 8,), T.int32),
     ) -> None:
@@ -188,7 +190,9 @@ def candidate_block_max_tl(max_model_len: int, block_size: int) -> Any:
             # A zero extent makes Persistent's group-size divisor zero.
             if total_tasks > 0:
                 for task_index in T.Persistent([total_tasks], num_cores, core, group_size=1, num_stages=num_stages):
-                    packed_task = T.alloc_var(T.uint64, task_records[task_index])
+                    packed_task = T.alloc_var(
+                        T.uint64, task_records[task_index // tasks_per_row, task_index % tasks_per_row]
+                    )
                     task = T.cast(packed_task, T.int32)
                     row = task // tasks_per_row
                     block_base = (task % tasks_per_row) * blocks_per_task

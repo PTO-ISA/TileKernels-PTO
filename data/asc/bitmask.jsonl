@@ -1,0 +1,1 @@
+{"family": "bitmask", "name": "b512_v129280_ftp", "device": 1, "notes": "has_ftp, step 0, one row per request", "correct": true, "compared": "logits", "io_bytes": 537808896, "asc_us": 158.42620000000002, "pto_us": 322.3118, "ratio": 0.4915308716590582, "asc_gbs": 3394.6966852704913, "pto_gbs": 1668.5982207291202}

@@ -364,13 +364,17 @@ def _fused_norm_rope_hadamard_cast_store_kvcache_kernel(
         lane = V.vinterpret_cast(V.vci(T.int32(0), size=64), "uint32")
         # vcgmax of the even/odd pair max is one grouped reduction of 8.
         grouped = V.vcmax(V.vmax(V.vabs(even, full), V.vabs(odd, full), full), full, group=8)
-        maxima16 = V.vbrc(T.float32(0.0), size=64)
+        # The scatter is stored in a register buffer. A name rebound inside
+        # T.unroll does not dominate the uses after that loop.
+        maxima_regs = V.alloc_local((1,), V.vreg(64, T.float32))
+        maxima_regs[0] = V.vbrc(T.float32(0.0), size=64)
         lane8 = V.vci(T.int32(0), size=8)
         zero8 = V.vbrc(T.float32(0.0), size=8)
         for i in T.unroll(8, explicit=True):
             at = V.vcmps(lane8, T.int32(i), m8, "eq")
             slot = V.vcadd(V.vsel(at, grouped, zero8), m8, reassoc=True)
-            maxima16 = V.vsel(V.vcmps(lane, T.uint32(i), full, "eq"), V.vbrc(slot, size=64), maxima16)
+            maxima_regs[0] = V.vsel(V.vcmps(lane, T.uint32(i), full, "eq"), V.vbrc(slot, size=64), maxima_regs[0])
+        maxima16 = maxima_regs[0]
         if group_size == 16:
             am = maxima16
         elif group_size >= 64:
@@ -511,7 +515,7 @@ def _fused_norm_rope_hadamard_cast_store_kvcache_kernel(
                         row_regs = V.alloc_local((heads_per_step, head_dim // 64), V.vreg(64, T.float32))
                         input_regs = V.alloc_local((heads_per_step, head_dim // 128), V.vreg(128, T.bfloat16))
                         if do_norm:
-                            step_sums = V.alloc_local((heads_per_step,), V.vreg(1, T.float32))
+                            step_sums = V.alloc_local((heads_per_step,), V.vreg(64, T.float32))
                         for g in T.unroll(heads_per_step, explicit=True):
                             h = head_group * heads_per_step + g
                             for p in T.unroll(head_dim // 128, explicit=True):
@@ -520,7 +524,7 @@ def _fused_norm_rope_hadamard_cast_store_kvcache_kernel(
                                 x_hi = V.vcvt(V.vload(x_ub[h, p * 128 + 64], size=64), "float32")
                                 row_regs[g, 2 * p], row_regs[g, 2 * p + 1] = V.vdintlv(x_lo, x_hi, full)
                             if do_norm:
-                                step_sums[g] = square_sum_lane0(
+                                step_sums[g] = V.vbrc(square_sum_lane0(
                                     row_regs[g, sum_reg_indices[0]],
                                     row_regs[g, sum_reg_indices[1]],
                                     row_regs[g, sum_reg_indices[2]],
@@ -529,22 +533,17 @@ def _fused_norm_rope_hadamard_cast_store_kvcache_kernel(
                                     row_regs[g, sum_reg_indices[5]],
                                     row_regs[g, sum_reg_indices[6]],
                                     row_regs[g, sum_reg_indices[7]],
-                                )
+                                ), size=64)
                         if do_norm:
                             # heads_per_step in [1, 2, 4]
+                            # step_sums[g] is already the 64-lane broadcast of that head's sum.
                             if heads_per_step == 1:
-                                packed_sums = V.vbrc(step_sums[0], size=64)
+                                packed_sums = step_sums[0]
                             elif heads_per_step == 2:
-                                packed_sums, unused_sums01 = V.vintlv(
-                                    V.vbrc(step_sums[0], size=64), V.vbrc(step_sums[1], size=64), full
-                                )
+                                packed_sums, unused_sums01 = V.vintlv(step_sums[0], step_sums[1], full)
                             elif heads_per_step == 4:
-                                sums01, unused_sums01 = V.vintlv(
-                                    V.vbrc(step_sums[0], size=64), V.vbrc(step_sums[1], size=64), full
-                                )
-                                sums23, unused_sums23 = V.vintlv(
-                                    V.vbrc(step_sums[2], size=64), V.vbrc(step_sums[3], size=64), full
-                                )
+                                sums01, unused_sums01 = V.vintlv(step_sums[0], step_sums[1], full)
+                                sums23, unused_sums23 = V.vintlv(step_sums[2], step_sums[3], full)
                                 packed_sums, unused_packed_sums = V.vintlv(sums01, sums23, full)
                             packed_rstd = rstd_impl(packed_sums)
                         for g in T.unroll(heads_per_step, explicit=True):
@@ -694,10 +693,11 @@ def _fused_norm_rope_hadamard_cast_store_kvcache_kernel(
                                 if cache_sf_format == "fp32":
                                     V.vstore(V.vinterpret_cast(sf_row, "float32"), sf_ub[h, sf_offset], sf_mask)
                                 elif cache_sf_format == "e4m3":
-                                    sf_bytes = V.vcvt(sf_row, "uint8", rounding="Z")
+                                    sf_bytes = V.vcvt(sf_row, "uint8")
                                     V.vstore(V.vinterpret_cast(sf_bytes, "float8_e4m3fn"), sf_ub[h, sf_offset], sf_mask)
                                 else:
-                                    V.vstore(V.vcvt(sf_row, "uint8", rounding="Z"), sf_ub[h, sf_offset], sf_mask)
+                                    # Integer narrowing has no rounding mode.
+                                    V.vstore(V.vcvt(sf_row, "uint8"), sf_ub[h, sf_offset], sf_mask)
 
                 if return_bf16:
                     T.copy(y_ub[0:act_rows, :], out_bf16[batch_start : batch_start + act_rows, :])

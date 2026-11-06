@@ -77,6 +77,10 @@ def replace_input_embeds_tl(
             # Per-batch staging for the B consecutive int32 metadata reads
             ids_ub = T.alloc_shared([B], "int32")
             off_ub = T.alloc_shared([B], "int32")
+            # Loop-carried alloc_var becomes an scf.for iter_arg that vpto
+            # rejects (operand does not dominate). A one-word UB flag is the
+            # same 0/1 state without a carried scalar.
+            flag_ub = T.alloc_shared((1,), "int32")
             T.annotate_buffer_versions({ids_ub: num_stages, off_ub: num_stages})
 
             for blk in T.Persistent([T.ceildiv(num_tokens, B)], num_cores, pid, group_size=1, num_stages=num_stages):
@@ -101,26 +105,26 @@ def replace_input_embeds_tl(
                     T.copy(stage_ub[0:rem, :], input_embeds[tok0 : tok0 + rem, :])
                 else:
                     # Pre-scan the (already-in-UB) ids for any image/pad token.
-                    any_special = T.alloc_var("int32", 0)
+                    flag_ub[0] = 0
                     for b in T.serial(B):
                         if b < rem:
                             sid = T.int32(ids_ub[b])
                             if sid == image_token_id:
-                                any_special = 1
+                                flag_ub[0] = 1
                             for i in T.serial(num_pad_tokens):
                                 if sid == T.int32(pad_ids_ub[i]):
-                                    any_special = 1
+                                    flag_ub[0] = 1
 
-                    if any_special == 1:
+                    if flag_ub[0] == 1:
                         for b in T.serial(B):
                             if b < rem:
                                 tok = tok0 + b
                                 input_id = T.int32(ids_ub[b])
                                 # Default: keep the current row (identity gather).
-                                picked = T.alloc_var("int32", -1)
+                                flag_ub[0] = 0
                                 if input_id == image_token_id:
                                     T.copy(images_embeds[T.int32(off_ub[b]) - 1, :], stage_ub[b, :])
-                                    picked = 1
+                                    flag_ub[0] = 1
                                 for i in T.serial(num_pad_tokens):
                                     if input_id == T.int32(pad_ids_ub[i]):
                                         # UB->UB row copy
@@ -130,8 +134,8 @@ def replace_input_embeds_tl(
                                                     V.vload(pad_embeds_ub[i, e * SIMD_LANES], size=SIMD_LANES),
                                                     stage_ub[b, e * SIMD_LANES],
                                                 )
-                                        picked = 1
-                                if picked == -1:
+                                        flag_ub[0] = 1
+                                if flag_ub[0] == 0:
                                     T.copy(input_embeds[tok, :], stage_ub[b, :])
 
                         T.copy(stage_ub[0:rem, :], input_embeds[tok0 : tok0 + rem, :])

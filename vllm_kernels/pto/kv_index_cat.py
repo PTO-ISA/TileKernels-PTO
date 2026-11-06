@@ -61,7 +61,7 @@ def kv_index_cat_tl(dtype: str, window_size: int, topk_tokens: int, out_stride: 
                 with T.SimdVF():
                     mask = V.create_mask(VL, size=VL)
                     for r in T.serial(rows):
-                        for v in T.serial(T.ceildiv(copy_len, VL)):
+                        for v in T.unroll(B // VL, explicit=True):
                             val = V.vload(ub[r, v * VL], size=VL)
                             add = V.vadds(val, total_k + total_k_swa, mask)
                             keep = V.vcmps(val, T.int32(-1), mask, "eq")

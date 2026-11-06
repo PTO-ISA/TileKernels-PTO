@@ -104,6 +104,8 @@ def compute_seqlens_q_by_confidence_rates_tl(nextn: int) -> Any:
                             equal = V.vcmp(other, my_rate[t], full, "eq")
                             earlier = V.vcmps(other_flat, seq_idx * nextn + t, full, "lt")
                             beats = V.vor(greater, V.vand(equal, earlier))
+                            # vcadd returns one lane. Broadcast it to the full
+                            # rank vector, matching ASC vcadd's register-wide result.
                             rank[t] = V.vadd(
                                 rank[t],
                                 V.vbrc(V.vcadd(V.vsel(beats, one_i, zero_i), full, reassoc=True), size=VL),

@@ -461,9 +461,13 @@ def finalize_verification_tl(
             topk_tile = T.alloc_var(T.int32, T.if_then_else(topk_n <= TOPK_SMALL_TILE, TOPK_SMALL_TILE, TOPK_LARGE_TILE))
             T.assume(topk_tile >= TOPK_SMALL_TILE)
             T.assume(topk_tile <= TOPK_LARGE_TILE)
-            topk_rows = T.alloc_var(T.int32, T.min(block_rows_aligned, TOPK_BUFFER_ELEMS // topk_tile))
-            T.assume(topk_rows >= TOPK_MIN_ROWS)
-            T.assume(topk_rows <= TOPK_MAX_ROWS)
+            # Pitch every UB row at the wide tile. A dynamic pitch is a legal
+            # ASC layout, and vpto cannot prove the masked vstore is 32-byte
+            # aligned. Both pitches are multiples of the vector length, so the
+            # logical columns stay packed at the start of the row.
+            topk_rows = T.alloc_var(T.int32, T.min(block_rows_aligned, TOPK_MIN_ROWS))
+            T.assume(topk_rows >= 1)
+            T.assume(topk_rows <= TOPK_MIN_ROWS)
             # DMA destinations retain a full 32-byte block for short copies.
             ftp_ub = T.alloc_shared((8,), T.int32)
             seqlen_q_ub = T.alloc_shared((8,), T.int32)
@@ -489,16 +493,16 @@ def finalize_verification_tl(
             # give them runtime row pitches without dynamic UB allocations or
             # a second set of buffers for the small/wide layouts.
             top_logprobs_ub_raw = T.alloc_shared((TOPK_BUFFER_ELEMS,), T.float32)
-            top_logprobs_ub = T.Tensor((topk_rows, topk_tile), T.float32, data=top_logprobs_ub_raw.data, scope="shared.dyn")
+            top_logprobs_ub = T.Tensor((TOPK_MIN_ROWS, TOPK_LARGE_TILE), T.float32, data=top_logprobs_ub_raw.data, scope="shared.dyn")
             top_token_ids_ub_raw = T.alloc_shared((TOPK_BUFFER_ELEMS,), T.int32)
-            top_token_ids_ub = T.Tensor((topk_rows, topk_tile), T.int32, data=top_token_ids_ub_raw.data, scope="shared.dyn")
+            top_token_ids_ub = T.Tensor((TOPK_MIN_ROWS, TOPK_LARGE_TILE), T.int32, data=top_token_ids_ub_raw.data, scope="shared.dyn")
             verified_top_logprobs_ub_raw = T.alloc_shared((TOPK_BUFFER_ELEMS,), T.float32)
             verified_top_logprobs_ub = T.Tensor(
-                (topk_rows, topk_tile), T.float32, data=verified_top_logprobs_ub_raw.data, scope="shared.dyn"
+                (TOPK_MIN_ROWS, TOPK_LARGE_TILE), T.float32, data=verified_top_logprobs_ub_raw.data, scope="shared.dyn"
             )
             verified_top_token_ids_ub_raw = T.alloc_shared((TOPK_BUFFER_ELEMS,), T.int32)
             verified_top_token_ids_ub = T.Tensor(
-                (topk_rows, topk_tile), T.int32, data=verified_top_token_ids_ub_raw.data, scope="shared.dyn"
+                (TOPK_MIN_ROWS, TOPK_LARGE_TILE), T.int32, data=verified_top_token_ids_ub_raw.data, scope="shared.dyn"
             )
             effective_accept_i8 = T.view(effective_accept, dtype=T.int8)
             is_final_i8 = T.view(is_final_input, dtype=T.int8)
