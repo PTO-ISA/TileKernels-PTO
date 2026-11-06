@@ -90,7 +90,24 @@ def apply_token_bitmask_by_step_inplace_tl(
                             bit_idx = V.vand(lane_idx, bit_idx_mask, full)
                             bit_flags = V.vshl(one, bit_idx, full)
                             low_word = V.create_mask(32, size=VL)
-                            for v in T.serial(copy_len // VL):
+                            nvec = copy_len // VL
+                            nsuper = nvec // 32
+                            # One 64-word load covers 32 logit vectors. vselr
+                            # broadcasts each word; a scalar vload+vbrc per vector does not.
+                            for group in T.serial(nsuper):
+                                packed = V.vload(bitmask_ub[group * 64], size=64)
+                                for sub in T.serial(4):
+                                    for lane in T.unroll(8, explicit=True):
+                                        local = sub * 8 + lane
+                                        v = group * 32 + local
+                                        word0 = V.vselr(packed, V.vbrc(local * 2, size=64))
+                                        word1 = V.vselr(packed, V.vbrc(local * 2 + 1, size=64))
+                                        words = V.vsel(low_word, word0, word1)
+                                        allowed = V.vcmps(V.vand(words, bit_flags, full), T.int32(0), full, "ne")
+                                        values = V.vload(logits_ub[v * VL], size=VL)
+                                        result = V.vsel(allowed, values, neg_inf)
+                                        V.vstore(result, logits_ub[v * VL], full)
+                            for v in T.serial(nsuper * 32, nvec):
                                 word0 = V.vbrc(V.vload(bitmask_ub[v * 2], size=1), size=VL)
                                 word1 = V.vbrc(V.vload(bitmask_ub[v * 2 + 1], size=1), size=VL)
                                 words = V.vsel(low_word, word0, word1)

@@ -360,21 +360,17 @@ def _fused_norm_rope_hadamard_cast_store_kvcache_kernel(
     @T.macro
     def compute_scales(even: Any, odd: Any, table: Any = None):
         full = V.create_mask(64, size=64)
-        m8 = V.create_mask(8, size=8)
         lane = V.vinterpret_cast(V.vci(T.int32(0), size=64), "uint32")
         # vcgmax of the even/odd pair max is one grouped reduction of 8.
         grouped = V.vcmax(V.vmax(V.vabs(even, full), V.vabs(odd, full), full), full, group=8)
-        # The scatter is stored in a register buffer. A name rebound inside
-        # T.unroll does not dominate the uses after that loop.
-        maxima_regs = V.alloc_local((1,), V.vreg(64, T.float32))
-        maxima_regs[0] = V.vbrc(T.float32(0.0), size=64)
-        lane8 = V.vci(T.int32(0), size=8)
-        zero8 = V.vbrc(T.float32(0.0), size=8)
-        for i in T.unroll(8, explicit=True):
-            at = V.vcmps(lane8, T.int32(i), m8, "eq")
-            slot = V.vcadd(V.vsel(at, grouped, zero8), m8, reassoc=True)
-            maxima_regs[0] = V.vsel(V.vcmps(lane, T.uint32(i), full, "eq"), V.vbrc(slot, size=64), maxima_regs[0])
-        maxima16 = maxima_regs[0]
+        # Park the 8 grouped maxima in the low lanes of a 64-lane vector.
+        # The store mask has to match the 8-lane vcmax result.
+        pad = T.alloc_shared((64,), T.float32)
+        V.vstore(V.vbrc(T.float32(0.0), size=64), pad[0])
+        T.simd.mem_bar("VST_VST")
+        V.vstore(grouped, pad[0], V.create_mask(8, size=8))
+        T.simd.mem_bar("VST_VLD")
+        maxima16 = V.vload(pad[0], size=64)
         if group_size == 16:
             am = maxima16
         elif group_size >= 64:

@@ -87,19 +87,16 @@ def _make_kv_scale_macros(is_fp4: bool, sf_format: str, use_reciprocal_lut: bool
         if use_reciprocal_lut:
             bits = V.vinterpret_cast(sf32, "uint32")
             mantissa = V.vand(V.vshrs(bits, 20, mask), V.vbrc(T.uint32(7), size=lanes), mask)
-            # vselr is a 64-lane uint32 op. Park the live mantissa lanes in a
-            # full register, gather, then narrow back to the group count.
-            lut_ub = T.alloc_shared((64,), T.uint32)
-            V.vstore(mantissa, lut_ub[0], mask)
-            T.simd.mem_bar("VST_VLD")
-            mantissa64 = V.vload(lut_ub[0], size=64)
-            if table is None:  # noqa: SIM108 -- Compile-time macro specialization.
-                normalized64 = V.vselr(build_table(), mantissa64)
-            else:
-                normalized64 = V.vselr(table, mantissa64)
-            V.vstore(normalized64, lut_ub[0], V.create_mask(lanes, size=64))
-            T.simd.mem_bar("VST_VLD")
-            normalized = V.vload(lut_ub[0], size=lanes)
+            # Eight-entry table, selected in the native lane count. A 64-lane
+            # vselr would spill the live mantissa lanes out to UB and back.
+            normalized = V.vbrc(T.uint32(_RECIPROCAL_BITS[0]), size=lanes)
+            normalized = V.vsel(V.vcmps(mantissa, T.uint32(1), mask, "eq"), V.vbrc(T.uint32(_RECIPROCAL_BITS[1]), size=lanes), normalized)
+            normalized = V.vsel(V.vcmps(mantissa, T.uint32(2), mask, "eq"), V.vbrc(T.uint32(_RECIPROCAL_BITS[2]), size=lanes), normalized)
+            normalized = V.vsel(V.vcmps(mantissa, T.uint32(3), mask, "eq"), V.vbrc(T.uint32(_RECIPROCAL_BITS[3]), size=lanes), normalized)
+            normalized = V.vsel(V.vcmps(mantissa, T.uint32(4), mask, "eq"), V.vbrc(T.uint32(_RECIPROCAL_BITS[4]), size=lanes), normalized)
+            normalized = V.vsel(V.vcmps(mantissa, T.uint32(5), mask, "eq"), V.vbrc(T.uint32(_RECIPROCAL_BITS[5]), size=lanes), normalized)
+            normalized = V.vsel(V.vcmps(mantissa, T.uint32(6), mask, "eq"), V.vbrc(T.uint32(_RECIPROCAL_BITS[6]), size=lanes), normalized)
+            normalized = V.vsel(V.vcmps(mantissa, T.uint32(7), mask, "eq"), V.vbrc(T.uint32(_RECIPROCAL_BITS[7]), size=lanes), normalized)
             exponent = V.vand(V.vshrs(bits, 23, mask), V.vbrc(T.uint32(255), size=lanes), mask)
             inverse_bits = V.vadd(
                 normalized,
@@ -222,16 +219,19 @@ def make_kv_quant_impl(
         return inverse, encoded
 
     @T.macro
-    def quantize_value(values: Any, inverse: Any):
+    def quantize_value(values: Any, inverse: Any = None, broadcast: Any = None):
         mask_v = V.create_mask(value_lanes, size=value_lanes)
-        mask_s = V.create_mask(scale_lanes, size=scale_lanes)
         # group_broadcast rejects a computed vector: its physical chunk is
         # padded. Spill, then reload with the layout-forming grouped vload.
-        inv_ub = T.alloc_shared((scale_lanes,), T.float32)
-        V.vstore(inverse, inv_ub[0], mask_s)
-        T.simd.mem_bar("VST_VLD")
-        slots = V.vload(inv_ub[0], size=scale_lanes, group=scale_lanes, stride=1)
-        scaled = V.vmul(values, V.vbrc(slots, size=value_lanes, group=scale_lanes), mask_v)
+        # Callers that already did that once per row pass broadcast.
+        if broadcast is None:
+            mask_s = V.create_mask(scale_lanes, size=scale_lanes)
+            inv_ub = T.alloc_shared((scale_lanes,), T.float32)
+            V.vstore(inverse, inv_ub[0], mask_s)
+            T.simd.mem_bar("VST_VLD")
+            slots = V.vload(inv_ub[0], size=scale_lanes, group=scale_lanes, stride=1)
+            broadcast = V.vbrc(slots, size=value_lanes, group=scale_lanes)
+        scaled = V.vmul(values, broadcast, mask_v)
         if fp4_e4m3_scale:
             # Truncate with a sticky low bit, NOT FP32 -> BF16 rounding. This
             # avoids double-rounding near FP4 midpoints and preserves exact ties

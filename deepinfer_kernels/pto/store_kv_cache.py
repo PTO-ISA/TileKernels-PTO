@@ -14,7 +14,7 @@ from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
 
 from ..common import KVCacheFormat
-from .kv_quant import build_reciprocal_table, make_kv_quant_impl
+from .kv_quant import make_kv_quant_impl
 
 
 @tilelang.jit(
@@ -158,19 +158,35 @@ def store_kv_cache_tl(
 
     @T.macro
     def quantize_tile_scalar(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: Any):
+        nchunk = quantized_elements // 128
         with T.SimdVF():
-            reciprocal_table = build_reciprocal_table() if reciprocal_lut_enabled else None
-            for h in T.serial(active):
-                for p in T.unroll(quantized_elements // 128, explicit=True):
-                    values = V.vcvt(V.vload(x[h, p * 128], size=128), "float32")
-                    inverse, scale = compute_scales(values, reciprocal_table)
-                    V.vstore(quantize_value(values, inverse), out[h, p * 128])
-                    store_scale_bytes(scale, scales, h, sf_col + p * scale_lanes)
+            if reciprocal_lut_enabled:
+                # FP4: one barrier for the row. FP8 got slower with the same batch.
+                mask_s = V.create_mask(scale_lanes, size=scale_lanes)
+                values_c = V.alloc_local((nchunk,), V.vreg(128, T.float32))
+                inv_ub = T.alloc_shared((nchunk * scale_lanes,), T.float32)
+                for h in T.serial(active):
+                    for p in T.unroll(nchunk, explicit=True):
+                        values_c[p] = V.vcvt(V.vload(x[h, p * 128], size=128), "float32")
+                        inverse, scale = compute_scales(values_c[p], None)
+                        V.vstore(inverse, inv_ub[p * scale_lanes], mask_s)
+                        store_scale_bytes(scale, scales, h, sf_col + p * scale_lanes)
+                    T.simd.mem_bar("VST_VLD")
+                    for p in T.unroll(nchunk, explicit=True):
+                        slots = V.vload(inv_ub[p * scale_lanes], size=scale_lanes, group=scale_lanes, stride=1)
+                        broadcast = V.vbrc(slots, size=128, group=scale_lanes)
+                        V.vstore(quantize_value(values_c[p], broadcast=broadcast), out[h, p * 128])
+            else:
+                for h in T.serial(active):
+                    for p in T.unroll(nchunk, explicit=True):
+                        values = V.vcvt(V.vload(x[h, p * 128], size=128), "float32")
+                        inverse, scale = compute_scales(values, None)
+                        V.vstore(quantize_value(values, inverse), out[h, p * 128])
+                        store_scale_bytes(scale, scales, h, sf_col + p * scale_lanes)
 
     @T.macro
     def quantize_tile_batched(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: Any):
         with T.SimdVF():
-            reciprocal_table = build_reciprocal_table() if reciprocal_lut_enabled else None
             values_r = V.alloc_local((rows_per_step,), V.vreg(128, T.float32))
             inverses = V.alloc_local((rows_per_step,), V.vreg(scale_lanes, T.float32))
             row_scales = V.alloc_local((rows_per_step,), V.vreg(scale_lanes, T.uint32))
@@ -178,7 +194,7 @@ def store_kv_cache_tl(
                 for p in T.unroll(quantized_elements // 128, explicit=True):
                     for r in T.unroll(rows_per_step, explicit=True):
                         values_r[r] = V.vcvt(V.vload(x[step * rows_per_step + r, p * 128], size=128), "float32")
-                        inverses[r], row_scales[r] = compute_scales(values_r[r], reciprocal_table)
+                        inverses[r], row_scales[r] = compute_scales(values_r[r], None)
                     for r in T.unroll(rows_per_step, explicit=True):
                         h = step * rows_per_step + r
                         V.vstore(quantize_value(values_r[r], inverses[r]), out[h, p * 128])

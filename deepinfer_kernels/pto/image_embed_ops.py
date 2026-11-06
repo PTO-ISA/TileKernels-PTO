@@ -376,17 +376,22 @@ def batch_downsample_tl(
                     # (which is especially slow for 2-byte bf16 elements).
                     with T.SimdVF():
                         lanes = VL_B16 if dtype == torch.bfloat16 else VL
-                        nvec = dim // lanes
+                        if dtype == torch.bfloat16:
+                            nvec = dim // VL_B16
+                        else:
+                            nvec = dim // VL
                         mask = V.create_mask(lanes, size=lanes)
+                        if dtype == torch.bfloat16:
+                            ramp = V.vmuls(V.vci(T.int16(0), size=lanes), T.int16(D2), mask)
+                        else:
+                            ramp = V.vmuls(V.vci(T.int32(0), size=lanes), T.int32(D2), mask)
                         for i in T.serial(D2):
-                            for v in T.serial(nvec):
+                            for v in T.unroll(nvec, explicit=True):
                                 # lane l -> out_ub element (v*lanes + l)*D2 + i
                                 if dtype == torch.bfloat16:
                                     # vscatter wants a uint16 index; vci has no
-                                    # uint16 overload, so build it as int16 and
-                                    # reinterpret (same bits).
-                                    idx = V.vmuls(V.vci(T.int16(0), size=lanes), T.int16(D2), mask)
-                                    idx = V.vadds(idx, T.int16(v * lanes * D2 + i), mask)
+                                    # uint16 overload, so the ramp is int16.
+                                    idx = V.vadds(ramp, T.int16(v * lanes * D2 + i), mask)
                                     V.vscatter(
                                         V.vload(win_ub[i, v * lanes], size=lanes),
                                         out_ub[0, 0, 0],
@@ -394,8 +399,7 @@ def batch_downsample_tl(
                                         mask,
                                     )
                                 else:
-                                    idx = V.vmuls(V.vci(T.int32(0), size=lanes), T.int32(D2), mask)
-                                    idx = V.vadds(idx, T.int32(v * lanes * D2 + i), mask)
+                                    idx = V.vadds(ramp, T.int32(v * lanes * D2 + i), mask)
                                     V.vscatter(
                                         V.vload(win_ub[i, v * lanes], size=lanes),
                                         out_ub[0, 0, 0],

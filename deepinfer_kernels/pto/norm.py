@@ -103,9 +103,10 @@ def norm_tl(
     rows_per_block = 32 if transpose_sf else rows_per_tile
     # Match hai-llm's four interleaved FMA chains without changing row tiling.
     num_reduction_accumulators = 4
-    # One row per VF step. Unrolling the ASC row group duplicates the
-    # compensated rstd until vpto's layout search cannot finish.
-    rows_per_simd = 1
+    # FP8 keeps one row: its quant scratch is sized by this count.
+    # Residual bf16 runs the tile's two rows in one VF. Plain bf16 stays at one
+    # row: the shared-scale spill was slower there (0.255 vs 0.294).
+    rows_per_simd = 1 if do_fp8_cast or not has_residual else min(2, rows_per_tile)
     rstd_impl = make_rstd_impl(hidden_size, eps)
     num_packs_per_row = align(num_groups // 2, 128 // rows_per_block)  # pad so each transpose iteration fills a 128-lane SIMD vector
     quant_rows_per_simd = rows_per_simd if do_fp8_cast else 0
@@ -159,48 +160,94 @@ def norm_tl(
         residual_out: T.Buffer,
         row_sqrsum: T.Buffer,
         row_start: int,
+        row_count: int,
     ) -> None:
         with T.SimdVF():
-            mask = V.create_mask(128, size=128)
-            row_sums = V.alloc_local((rows_per_simd, num_reduction_accumulators), V.vreg(128, T.float32))
-            row_scales = V.alloc_local((rows_per_simd,), V.vreg(128, T.float32))
-            for row_offset in T.unroll(rows_per_simd, explicit=True):
-                row = row_start + row_offset
-                for accumulator in T.unroll(num_reduction_accumulators, explicit=True):
-                    row_sums[row_offset, accumulator] = V.vbrc(T.float32(0.0), size=128)
-                for pair_group in T.serial(T.ceildiv(hidden_size, 128 * num_reduction_accumulators)):
-                    for pair in T.unroll(num_reduction_accumulators, explicit=True):
-                        column = (pair_group * num_reduction_accumulators + pair) * 128
-                        if column < hidden_size:
-                            if dtype == "bfloat16":
-                                packed = V.vload(x[row, column], size=128)
-                                if has_residual:
-                                    packed = V.vadd(packed, V.vload(residual[row, column], size=128), mask)
-                                    V.vstore(packed, residual_out[row, column], mask)
-                                values = V.vcvt(packed, "float32")
-                            else:
-                                values = load_pair(x, row, column)
-                                if has_residual:
-                                    values = V.vadd(values, load_pair(residual, row, column), mask)
-                                    store_pair(residual_out, row, column, values)
-                            row_sums[row_offset, pair] = V.vmula(row_sums[row_offset, pair], values, values, mask)
-                total = V.vadd(
-                    V.vadd(row_sums[row_offset, 0], row_sums[row_offset, 1], mask),
-                    V.vadd(row_sums[row_offset, 2], row_sums[row_offset, 3], mask),
-                    mask,
-                )
-                row_scales[row_offset] = rstd_impl(V.vbrc(V.vcadd(total, mask, reassoc=True), size=128))
-            T.simd.mem_bar("VST_VLD")
-            for pair in T.serial(hidden_size // 128):
-                column = pair * 128
-                weight_values = load_pair(weight, None, column)
-                if out_scale != 1.0:
-                    weight_values = V.vmuls(weight_values, T.float32(out_scale), mask)
+            if not has_residual:
+                mask = V.create_mask(128, size=128)
+                row_sums = V.alloc_local((rows_per_simd, num_reduction_accumulators), V.vreg(128, T.float32))
+                row_scales = V.alloc_local((rows_per_simd,), V.vreg(128, T.float32))
                 for row_offset in T.unroll(rows_per_simd, explicit=True):
                     row = row_start + row_offset
-                    values = load_pair(residual_out if has_residual else x, row, column)
-                    output = V.vmul(V.vmul(values, row_scales[row_offset], mask), weight_values, mask)
-                    store_pair(y, row, column, output)
+                    for accumulator in T.unroll(num_reduction_accumulators, explicit=True):
+                        row_sums[row_offset, accumulator] = V.vbrc(T.float32(0.0), size=128)
+                    for pair_group in T.serial(T.ceildiv(hidden_size, 128 * num_reduction_accumulators)):
+                        for pair in T.unroll(num_reduction_accumulators, explicit=True):
+                            column = (pair_group * num_reduction_accumulators + pair) * 128
+                            if column < hidden_size:
+                                if dtype == "bfloat16":
+                                    packed = V.vload(x[row, column], size=128)
+                                    values = V.vcvt(packed, "float32")
+                                else:
+                                    values = load_pair(x, row, column)
+                                row_sums[row_offset, pair] = V.vmula(row_sums[row_offset, pair], values, values, mask)
+                    total = V.vadd(
+                        V.vadd(row_sums[row_offset, 0], row_sums[row_offset, 1], mask),
+                        V.vadd(row_sums[row_offset, 2], row_sums[row_offset, 3], mask),
+                        mask,
+                    )
+                    row_scales[row_offset] = rstd_impl(V.vbrc(V.vcadd(total, mask, reassoc=True), size=128))
+                for pair in T.serial(hidden_size // 128):
+                    column = pair * 128
+                    weight_values = load_pair(weight, None, column)
+                    if out_scale != 1.0:
+                        weight_values = V.vmuls(weight_values, T.float32(out_scale), mask)
+                    for row_offset in T.unroll(rows_per_simd, explicit=True):
+                        row = row_start + row_offset
+                        values = load_pair(x, row, column)
+                        output = V.vmul(V.vmul(values, row_scales[row_offset], mask), weight_values, mask)
+                        store_pair(y, row, column, output)
+            else:
+                mask = V.create_mask(128, size=128)
+                row_sums = V.alloc_local((num_reduction_accumulators,), V.vreg(128, T.float32))
+                # One square-sum per row. A single rstd call covers the tile, so the
+                # compensated estimate is not duplicated across rows.
+                square_ub = T.alloc_shared((64,), T.float32)
+                V.vstore(V.vbrc(T.float32(0.0), size=64), square_ub[0])
+                T.simd.mem_bar("VST_VST")
+                for row_offset in T.serial(rows_per_simd):
+                    if row_offset < row_count:
+                        row = row_start + row_offset
+                        for accumulator in T.unroll(num_reduction_accumulators, explicit=True):
+                            row_sums[accumulator] = V.vbrc(T.float32(0.0), size=128)
+                        for pair_group in T.serial(T.ceildiv(hidden_size, 128 * num_reduction_accumulators)):
+                            for pair in T.unroll(num_reduction_accumulators, explicit=True):
+                                column = (pair_group * num_reduction_accumulators + pair) * 128
+                                if column < hidden_size:
+                                    if dtype == "bfloat16":
+                                        packed = V.vload(x[row, column], size=128)
+                                        if has_residual:
+                                            packed = V.vadd(packed, V.vload(residual[row, column], size=128), mask)
+                                            V.vstore(packed, residual_out[row, column], mask)
+                                        values = V.vcvt(packed, "float32")
+                                    else:
+                                        values = load_pair(x, row, column)
+                                        if has_residual:
+                                            values = V.vadd(values, load_pair(residual, row, column), mask)
+                                            store_pair(residual_out, row, column, values)
+                                    row_sums[pair] = V.vmula(row_sums[pair], values, values, mask)
+                        total = V.vadd(
+                            V.vadd(row_sums[0], row_sums[1], mask),
+                            V.vadd(row_sums[2], row_sums[3], mask),
+                            mask,
+                        )
+                        # vcadd is one lane: the same single-element store as ASC ONEPT.
+                        V.vstore(V.vcadd(total, mask, reassoc=True), square_ub[row_offset])
+                T.simd.mem_bar("VST_VLD")
+                V.vstore(rstd_impl(V.vload(square_ub[0], size=64)), square_ub[0])
+                T.simd.mem_bar("VST_VLD")
+                for pair in T.serial(hidden_size // 128):
+                    column = pair * 128
+                    weight_values = load_pair(weight, None, column)
+                    if out_scale != 1.0:
+                        weight_values = V.vmuls(weight_values, T.float32(out_scale), mask)
+                    for row_offset in T.serial(rows_per_simd):
+                        if row_offset < row_count:
+                            row = row_start + row_offset
+                            scale = V.vbrc(V.vload(square_ub[row_offset], size=1), size=128)
+                            values = load_pair(residual_out if has_residual else x, row, column)
+                            output = V.vmul(V.vmul(values, scale, mask), weight_values, mask)
+                            store_pair(y, row, column, output)
 
     @T.macro
     def store_sf(out_sf: T.Buffer, sf_row: int, row_offset: int, sf_col_offset: int, exponent) -> None:
@@ -403,7 +450,16 @@ def norm_tl(
                         for row_group in T.serial(rows_per_tile // rows_per_simd):
                             group_start = row_group * rows_per_simd
                             if group_start < tile_len:
-                                normalize_rows(x_ub, y_ub, weight_ub, residual_ub, residual_out_ub, row_sqrsum_ub, group_start)
+                                normalize_rows(
+                                    x_ub,
+                                    y_ub,
+                                    weight_ub,
+                                    residual_ub,
+                                    residual_out_ub,
+                                    row_sqrsum_ub,
+                                    group_start,
+                                    T.min(rows_per_simd, tile_len - group_start),
+                                )
                                 if do_fp8_cast:
                                     sf_row_start = tile_in_block * rows_per_tile + group_start
                                     num_quant_rows = T.min(rows_per_simd, tile_len - group_start)
