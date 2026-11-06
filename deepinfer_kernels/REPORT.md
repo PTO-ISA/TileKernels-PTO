@@ -1,21 +1,19 @@
-# ASC vs PTO on-device report
+# DeepInfer tilelang_ops ASC->PTO porting
 
-Kernels are the DeepInfer [`tilelang_ops/asc`](https://github.com/deepseek-ai/DeepInfer/tree/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc) set
-(DeepInfer `a679bb8`), launched on all vector cores.
-Toolchain: CANN 9.2.0, torch-npu 2.9.0.post6, ptoas 0.72, tilelang 0.1.15 (`pto-dev` `479d5cd1`).
+Port all DeepInfer [`tilelang_ops/asc`](https://github.com/deepseek-ai/DeepInfer/tree/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc) to PTO.VMI. (https://github.com/PTO-ISA/TileKernels-PTO/pull/37 was VF-sim only. This PR runs on device)
+
+Dependency: 
+- CANN 9.2.0
+-  `pto-dev` branch https://github.com/PTO-ISA/tilelang/commit/479d5cd1acfbd31bcd750b728e992409d5cbb175
+- https://github.com/hw-native-sys/PTOAS/releases/tag/v0.72
 `PTO_FLAGS=--pto-backend=vpto --pto-level=level3 --vmi-layout-max-frontier-entries=65536 --vmi-layout-max-transitions=262144`.
-Device: Ascend950DT. `ratio = ASC_us / PTO_us`. A row is a perf miss when ratio < 0.95.
-Timing is `do_bench(..., backend='msprof')` median over `BENCH_REP` repeats after 5 warmup launches.
 
-## Shapes
+## Input Shape choices
 
-Each row is one case from DeepInfer's `@pytest.mark.benchmark` lists
-(DeepInfer `a679bb8`), not a serving trace and not every pytest combination.
-The sizes that carry the comparison are DeepSeek-class prefill shapes:
-RMSNorm is 32768 tokens by hidden 7168, the logit kernels use vocab 129280,
-and gather uses 131072 rows.
+Most input shapes are DeepSeek model's prefill shapes.
+RMSNorm is 32768 tokens by hidden 7168, the logit kernels use vocab 129280, and gather uses 131072 rows.
 
-Source lists:
+Source of test shapes:
 
 - Norm, including `32768 × 7168`: [norm.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/norm.py#L472)
 - KV cache benchmark length, 65536 tokens: [cache_common.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/cache_common.py#L388)
@@ -60,6 +58,11 @@ still needs a run wherever the note is marked TODO.
   ([image_embed_ops.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/image_embed_ops.py#L617)).
   This report uses 8 images at `n_vit = 54`.
   TODO: rgb at 50 images, and downsample at `(32, 54)` and `(8, 96)`.
+
+## Performance numbers
+
+Device: Ascend950DT. `ratio = ASC_us / PTO_us`. 
+Timing is `do_bench(..., backend='msprof')` median over `BENCH_REP` repeats after 5 warmup launches.
 
 Kernels that finish in a few microseconds are launch-bound.
 Their ratio is not a saturated prefill measurement.
@@ -126,6 +129,8 @@ Their ratio is not a saturated prefill measurement.
 Rows: 56. Correct: 51. Perf misses (ratio < 0.95): 25.
 
 ## Perf misses
+
+A row is a perf miss when ratio < 0.95.
 
 - `bitmask/b512_v129280_ftp` ratio 0.492. PTO broadcasts the mask with vload+vbrc and walks the left bits serially; ASC uses BRC_B32. has_ftp, step 0, one row per request
 - `candidate/block_max` ratio 0.317. Block max is a grouped vcmax over bf16 tiles. ASC reduces the same tile with packed vmax. rows=256 valid_len=65536 block=16
