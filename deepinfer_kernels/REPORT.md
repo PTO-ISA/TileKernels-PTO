@@ -30,13 +30,42 @@ Source lists:
 - Image embeds: [image_embed_ops.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/image_embed_ops.py#L240)
 - Remaining kernels use the matching module under [tilelang_ops/](https://github.com/deepseek-ai/DeepInfer/tree/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops).
 
-A few rows are a smaller member of the same list. KV load and store use 1024–8192 tokens
-instead of 65536. Candidate block-max uses width 65536 instead of `1 << 20`.
-Fused sample uses vocab 1024 instead of 129280. Fused transform uses 8 heads of
-dimension 128 instead of the 64×512 and 32×128 captured cases, and skips the
-cache store that requires `num_heads == 1`. Image pad and downsample use about
-54 ViT tokens. Kernels that finish in a few microseconds are launch-bound, so
-their ratio is not a saturated prefill measurement.
+## Smaller than the DeepInfer list
+
+Five rows use a smaller size than the published benchmark. The original size
+still needs a run wherever the note is marked TODO.
+
+- **KV load and store.** DeepInfer times every layout at 65536 tokens
+  ([cache_common.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/cache_common.py#L388)).
+  This report uses 8192 (bf16), 4096 (fp8 and fp4), and 1024 (mxfp8 index).
+  A 65536-token cache fits under the 512 MiB tensor cap, so the cut is a harness choice.
+  TODO: rerun each layout at 65536 tokens.
+- **Candidate block-max.** The test allocates `max_model_len = 1 << 20`
+  ([candidate_blocks.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/candidate_blocks.py#L184)).
+  At 256 rows that buffer is 512 MiB of bf16, which is the harness cap.
+  The case sets the kernel width to the valid length, 65536, the smallest `valid_len` in that list.
+  Tasks per row are `ceil(max_model_len / 16384)`, so this width is 1 task per row and `1 << 20` is 64.
+  TODO: rerun `max_model_len = 1 << 20` at a row count that stays under 512 MiB (one row is 2 MiB).
+- **Fused sample.** The sampling tests use vocab 129280 and 1024
+  ([random_sampling.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/random_sampling.py#L101)).
+  Random sampling in this report has both. Fused sample has only 1024.
+  The kernel accepts 129280: it requires a multiple of 64 and chunks a vocab of 8192 or more by 8192.
+  TODO: add the vocab-129280 fused-sample row, including the reject specialization.
+- **Fused transform.** The captured cases are 64 heads by 512 and 32 heads by 128, with up to 32768 tokens
+  ([fused_transform.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/fused_transform.py#L673)).
+  These rows are 8 heads by 128 at 4096 and 1024 tokens.
+  The KV-cache store does not run: the kernel allows `store_cache` only when `num_heads == 1`, and these rows use 8 heads.
+  TODO: run a captured head shape (64×512 or 32×128) and a `num_heads == 1` row that stores the KV cache.
+- **Image pad and downsample.** `n_vit = 54` is the benchmark grid side, about 54×54 patches per image.
+  The rgb benchmark builds 50 images at that grid
+  ([image_embed_ops.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/image_embed_ops.py#L386)).
+  Downsample is `(8, 24)`, `(32, 54)`, and `(8, 96)`
+  ([image_embed_ops.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/image_embed_ops.py#L617)).
+  This report uses 8 images at `n_vit = 54`.
+  TODO: rgb at 50 images, and downsample at `(32, 54)` and `(8, 96)`.
+
+Kernels that finish in a few microseconds are launch-bound.
+Their ratio is not a saturated prefill measurement.
 
 | family | case | correct | ASC us | PTO us | ratio | ASC GB/s | PTO GB/s | note |
 |---|---|---|---:|---:|---:|---:|---:|---|
