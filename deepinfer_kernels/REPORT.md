@@ -9,8 +9,34 @@ conda `cann91_dev` (`torch-npu==2.9.0.post6`), ptoas 0.72, tilelang `0.1.15+cpu.
 `--vmi-layout-max-frontier-entries=65536 --vmi-layout-max-transitions=262144`.
 Device: Ascend950DT. `ratio = ASC_us / PTO_us`. A row is a perf miss when ratio < 0.95.
 Timing is `do_bench(..., backend='msprof')` median over `BENCH_REP` repeats after 5 warmup launches.
-Shapes are the production sizes from the DeepInfer benchmark tests (one row per kernel
-and per compile-time specialization, not every pytest combination).
+
+## Shapes
+
+Each row is one case from DeepInfer's `@pytest.mark.benchmark` lists
+(DeepInfer `a679bb8`), not a serving trace and not every pytest combination.
+The sizes that carry the comparison are DeepSeek-class prefill shapes:
+RMSNorm is 32768 tokens by hidden 7168, the logit kernels use vocab 129280,
+and gather uses 131072 rows.
+
+Source lists:
+
+- Norm, including `32768 × 7168`: [norm.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/norm.py#L472)
+- KV cache benchmark length, 65536 tokens: [cache_common.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/cache_common.py#L388)
+- Gather `(n, d, m)`: [gather.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/gather.py#L98)
+- Candidate blocks, `max_model_len = 1 << 20`: [candidate_blocks.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/candidate_blocks.py#L184)
+- Fused transform, captured 550B Q cases: [fused_transform.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/fused_transform.py#L673)
+- Sampling batch 256 or 4096 and vocab 129280 or 1024: [random_sampling.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/random_sampling.py#L101)
+- Sampler vocab 129280: [sampler.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/sampler.py#L634)
+- Image embeds: [image_embed_ops.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/image_embed_ops.py#L240)
+- Remaining kernels use the matching module under [tilelang_ops/](https://github.com/deepseek-ai/DeepInfer/tree/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops).
+
+A few rows are a smaller member of the same list. KV load and store use 1024–8192 tokens
+instead of 65536. Candidate block-max uses width 65536 instead of `1 << 20`.
+Fused sample uses vocab 1024 instead of 129280. Fused transform uses 8 heads of
+dimension 128 instead of the 64×512 and 32×128 captured cases, and skips the
+cache store that requires `num_heads == 1`. Image pad and downsample use about
+54 ViT tokens. Kernels that finish in a few microseconds are launch-bound, so
+their ratio is not a saturated prefill measurement.
 
 | family | case | correct | ASC us | PTO us | ratio | ASC GB/s | PTO GB/s | note |
 |---|---|---|---:|---:|---:|---:|---:|---|
