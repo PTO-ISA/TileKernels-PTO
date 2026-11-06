@@ -23,6 +23,7 @@ ALL = [*INDEX_CASES, *NUMERIC_CASES, *SAMPLE_CASES]
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", action="append", default=[])
+    parser.add_argument("--case", action="append", default=[], help="family/name, repeatable")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
     if args.list:
@@ -32,10 +33,17 @@ def main() -> None:
     selected = ALL
     if args.family:
         wanted = set(args.family)
-        selected = [case for case in ALL if case.family in wanted]
+        selected = [case for case in selected if case.family in wanted]
         missing = wanted - {case.family for case in selected}
         if missing:
             raise SystemExit(f"unknown family {sorted(missing)}")
+    if args.case:
+        wanted_cases = set(args.case)
+        known = {f"{case.family}/{case.name}" for case in ALL}
+        missing = wanted_cases - known
+        if missing:
+            raise SystemExit(f"unknown case {sorted(missing)}")
+        selected = [case for case in selected if f"{case.family}/{case.name}" in wanted_cases]
     dev = setup_device()
     import torch
 

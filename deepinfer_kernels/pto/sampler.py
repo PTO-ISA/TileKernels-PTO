@@ -298,12 +298,15 @@ def remap_draft_topk_tl(
                         index_tail_mask = V.vcmps(index_tail_offset_v, pool_size, mask, "lt")
                         V.vscatter(value_tail_v, pool_ub[0], index_tail_offset_v, index_tail_mask)
                         T.simd.mem_bar("VST_VLD")
-                        for v in T.serial(force_topk // VL):
+                        zero_off = V.vbrc(T.uint32(0), size=VL)
+                        for v in T.unroll(force_topk // VL, explicit=True):
                             query_v = V.vload(query_ub[v * VL], size=VL)
                             query_adj_v = V.vadds(query_v, T.int32(-range_l), mask)
                             query_offset_v = V.vinterpret_cast(query_adj_v, "uint32")
                             pool_mask = V.vcmps(query_offset_v, pool_size, mask, "lt")
-                            out_v = V.vgather(pool_ub[0], query_offset_v, pool_mask)
+                            # Full-mask gather. Out-of-pool lanes read element 0 and are not stored.
+                            safe_off = V.vsel(pool_mask, query_offset_v, zero_off)
+                            out_v = V.vgather(pool_ub[0], safe_off, mask)
                             V.vstore(out_v, out_ub[v * VL], pool_mask)
                     local_min_v = V.vbrc(V.vcmin(local_position_v, mask), size=VL)
                     missing = V.vcmps(local_min_v, T.max_value(T.int32), mask, "eq")

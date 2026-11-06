@@ -64,10 +64,14 @@ def load_kv_index_tl(
                         q_var = V.vshrs(pos0, block_bits, mask)
                         rem_var = V.vand(pos0, mask_const, mask)
                         q_var = V.vadds(q_var, -base_blk, mask)
+                        zero_q = V.vbrc(T.int32(0), size=VL)
                         for v in T.serial(B // VL):
                             gidx = V.vci(i * B + v * VL, size=VL)
                             mask_valid = V.vcmps(q_var, slice_len, mask, "lt")
-                            blk = V.vgather(blk_ub[0], V.vinterpret_cast(q_var, "uint32"), mask_valid)
+                            # Full-mask gather lowers without a trailing vsel.
+                            # Out-of-range lanes read block 0 and are discarded below.
+                            q_safe = V.vsel(mask_valid, q_var, zero_q)
+                            blk = V.vgather(blk_ub[0], V.vinterpret_cast(q_safe, "uint32"), mask)
                             val = V.vadd(V.vshls(blk, block_bits, mask), rem_var, mask)
                             res = V.vsel(V.vcmps(gidx, len, mask, "lt"), val, neg1)
                             V.vstore(res, index[v * VL], mask)

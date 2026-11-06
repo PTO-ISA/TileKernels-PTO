@@ -1,19 +1,21 @@
-# DeepInfer tilelang_ops ASC->PTO porting
+# ASC vs PTO on-device report
 
-Port all DeepInfer [`tilelang_ops/asc`](https://github.com/deepseek-ai/DeepInfer/tree/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc) to PTO.VMI. (https://github.com/PTO-ISA/TileKernels-PTO/pull/37 was VF-sim only. This PR runs on device)
-
-Dependency: 
-- CANN 9.2.0
--  `pto-dev` branch https://github.com/PTO-ISA/tilelang/commit/479d5cd1acfbd31bcd750b728e992409d5cbb175
-- https://github.com/hw-native-sys/PTOAS/releases/tag/v0.72
+Kernels are the DeepInfer [`tilelang_ops/asc`](https://github.com/deepseek-ai/DeepInfer/tree/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc) set
+(DeepInfer `a679bb8`), launched on all vector cores.
+Toolchain: CANN 9.2.0, torch-npu 2.9.0.post6, ptoas 0.72, tilelang 0.1.15 (`pto-dev` `479d5cd1`).
 `PTO_FLAGS=--pto-backend=vpto --pto-level=level3 --vmi-layout-max-frontier-entries=65536 --vmi-layout-max-transitions=262144`.
+Device: Ascend950DT. `ratio = ASC_us / PTO_us`. A row is a perf miss when ratio < 0.95.
+Timing is `do_bench(..., backend='msprof')` median over `BENCH_REP` repeats after 5 warmup launches.
 
-## Input Shape choices
+## Shapes
 
-Most input shapes are DeepSeek model's prefill shapes.
-RMSNorm is 32768 tokens by hidden 7168, the logit kernels use vocab 129280, and gather uses 131072 rows.
+Each row is one case from DeepInfer's `@pytest.mark.benchmark` lists
+(DeepInfer `a679bb8`), not a serving trace and not every pytest combination.
+The sizes that carry the comparison are DeepSeek-class prefill shapes:
+RMSNorm is 32768 tokens by hidden 7168, the logit kernels use vocab 129280,
+and gather uses 131072 rows.
 
-Source of test shapes:
+Source lists:
 
 - Norm, including `32768 × 7168`: [norm.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/norm.py#L472)
 - KV cache benchmark length, 65536 tokens: [cache_common.py](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/cache_common.py#L388)
@@ -59,11 +61,6 @@ still needs a run wherever the note is marked TODO.
   This report uses 8 images at `n_vit = 54`.
   TODO: rgb at 50 images, and downsample at `(32, 54)` and `(8, 96)`.
 
-## Performance numbers
-
-Device: Ascend950DT. `ratio = ASC_us / PTO_us`. 
-Timing is `do_bench(..., backend='msprof')` median over `BENCH_REP` repeats after 5 warmup launches.
-
 Kernels that finish in a few microseconds are launch-bound.
 Their ratio is not a saturated prefill measurement.
 
@@ -71,9 +68,9 @@ Their ratio is not a saturated prefill measurement.
 |---|---|---|---:|---:|---:|---:|---:|---|
 | bitmask | b512_v129280_ftp | yes | 158.43 | 322.31 | 0.492 | 3394.70 | 1668.60 | perf PTO broadcasts the mask with vload+vbrc and walks the left bits serially; ASC uses BRC_B32. has_ftp, step 0, one row per request logits |
 | block_tables | n256_q8_b4096 | yes | 11.39 | 10.75 | 1.060 | 3315.78 | 3513.27 | full max_num_blocks rows block_tables_out |
-| candidate | block_max | yes | 16.56 | 52.29 | 0.317 | 2152.71 | 681.87 | perf Block max is a grouped vcmax over bf16 tiles. ASC reduces the same tile with packed vmax. rows=256 valid_len=65536 block=16 block_scores,valid_blocks |
+| candidate | block_max | yes | 16.56 | 52.29 | 0.317 | 2152.71 | 681.87 | perf Block max converts 128 bf16 lanes to f32, then one grouped vcmax. vcmax rejects bf16, and the ASC even/odd split is a part= convert. rows=256 valid_len=65536 block=16 block_scores,valid_blocks |
 | candidate | compact_lens | yes | 7.82 | 7.93 | 0.986 | 67.14 | 66.22 | rows=128 topk_blocks=1024 block=16 compact_lens |
-| candidate | restore_indices | yes | 2.34 | 3.48 | 0.674 | 475.68 | 320.64 | perf Restore gathers block ids with vgather; ASC uses vgather2. rows=128 topk_tokens=1024 topk_blocks=128 block=16 offset=1 compact_indices |
+| candidate | restore_indices | yes | 2.42 | 3.42 | 0.707 | 461.43 | 326.31 | perf Restore gathers block ids with a full-mask vgather unrolled across the token block. ASC uses vgather2. rows=128 topk_tokens=1024 topk_blocks=128 block=16 offset=1 compact_indices |
 | compress | decode | yes | 8.87 | 10.08 | 0.879 | 8382.34 | 7369.44 | perf Softmax sum is a float vdiv. ASC divides integers. The tile is unchanged. ratio=2 dim=512 seqs=64 nextn=6 kv_compressed,state_cache |
 | compress | prefill | yes | 201.24 | 207.49 | 0.970 | 1545.60 | 1499.06 | ratio=2 dim=512 has_index=0 seqs=8 qlen=8192 kv_compressed,state_cache |
 | cp_mirror | prepare_b4096_c1_2 | yes | 93.38 | 112.50 | 0.830 | 20.09 | 16.67 | perf PTO has no dynamic shift, so the binary search is straight-line constant shifts. TILE is unchanged. cp_size 8, cp_rank 7, ratios (1, 2) cu_lens,mirror_cp_reverse_index,mirror_cp_index,ks,ke |
@@ -94,9 +91,9 @@ Their ratio is not a saturated prefill measurement.
 | image | batch_downsample_pool | yes | 56.60 | 61.55 | 0.920 | 937.90 | 862.46 | perf Pool reduction stays in the VF. ASC is closer to the copy bandwidth of the same tile. imgs=8 n_vit=54 dim=1024 ratio=3 downsample=1 images_embeds_sum |
 | image | replace_embeds | yes | 11.53 | 11.21 | 1.028 | 3457.74 | 3555.99 | tokens=4096 hidden=4096 input_embeds |
 | image | rgb_pad | yes | 665.80 | 639.30 | 1.041 | 54.47 | 56.73 | patch=14 imgs=8 n_vit=54 padded=1 output |
-| kv_index | paged_n1024_b128 | yes | 14.13 | 55.78 | 0.253 | 2393.59 | 606.40 | perf Paged gather is vgather. ASC uses vgather2. The SWA path, which is copies, matches. index_length 8192, block_size 128, in-bounds tables kv_index |
+| kv_index | paged_n1024_b128 | yes | 14.32 | 53.67 | 0.267 | 2361.65 | 630.24 | perf Paged gather is a full-mask vgather, which lowers to one vgather2_bc. The remaining gap is the serial 128-vector carry. index_length 8192, block_size 128, in-bounds tables kv_index |
 | kv_index | swa_n1024 | yes | 5.31 | 5.26 | 1.008 | 100.35 | 101.15 | index_length 128, block_size 128, no block tables kv_index |
-| kv_index_cat | q16384_w128_k1024 | yes | 43.58 | 63.56 | 0.686 | 3464.75 | 2375.79 | perf Explicitly unrolled VF on a bandwidth-bound index cat. The tile is unchanged. largest _KV_INDEX_CAT_CASES row out |
+| kv_index_cat | q16384_w128_k1024 | yes | 43.58 | 63.56 | 0.686 | 3464.75 | 2375.79 | perf The two-vector add/select stays explicitly unrolled. A serial loop matching ASC was slower, so the tile is unchanged. largest _KV_INDEX_CAT_CASES row out |
 | load_kv | bf16 | yes | 5.94 | 5.92 | 1.003 | 2823.32 | 2832.76 | block=64 tokens=8192 pattern=aligned layout=BF16 KV. kv |
 | load_kv | mxfp8_index | yes | 2.35 | 2.21 | 1.060 | 115.38 | 122.31 | block=64 tokens=1024 pattern=aligned layout=V41, index kv. kv,kv_sf |
 | load_kv | v41_fp4 | yes | 4.83 | 14.68 | 0.329 | 1113.32 | 366.15 | perf Dequant is a 64-lane vselr table plus a grouped scale broadcast. ASC uses packed SIMD. block=64 tokens=4096 pattern=aligned layout=V41, FP4 main kv. kv |
@@ -113,7 +110,7 @@ Their ratio is not a saturated prefill measurement.
 | sampler | get_accept_result | yes | 9.03 | 9.75 | 0.926 | 0.80 | 0.74 | perf Same SIMT accept scan. The medians differ by under a microsecond. total_q 256, has_golden, request length 16 token_ids,effective_accept,is_final |
 | sampler | map_lookup | yes | 3.49 | 3.65 | 0.956 | 600.70 | 574.34 | by_key float32, rows 256, force_topk 1024 out |
 | sampler | prepare_verification_metadata | yes | 2.97 | 2.66 | 1.115 | 4.32 | 4.81 | req 256, max_steps 7 row_to_req,local_step,is_verify |
-| sampler | remap_draft_topk | yes | 10.30 | 25.60 | 0.402 | 407.77 | 164.00 | perf Remap gathers with vgather. ASC uses vgather2. total_q 256, force_topk 1024, vocab 129280, pool 43136 aligned_logprobs,draft_local_ids,identity_rows |
+| sampler | remap_draft_topk | yes | 10.21 | 24.79 | 0.412 | 411.01 | 169.39 | perf Remap gathers with a full-mask vgather over an unrolled 16-vector lookup. ASC uses vgather2. total_q 256, force_topk 1024, vocab 129280, pool 43136 aligned_logprobs,draft_local_ids,identity_rows |
 | schedule | n1024_nextn7 | yes | 48.17 | 53.48 | 0.901 | 1.37 | 1.23 | perf The rank is a full-vector broadcast of vcadd. A 1-lane vadd is not a legal vreg. bench nextn=7, total_q=(1+nextn)*num_seqs*0.95; total_q is a scalar input cum_rates,seqlens_q |
 | seqlens | n1024_nextn3 | yes | 2.90 | 3.04 | 0.954 | 7.09 | 6.76 | half the rows remapped; in-place seqlens_k seqlens_k |
 | state_cache | load_to_cache | yes | 4.55 | 4.61 | 0.986 | 267.01 | 263.29 | same shape as select_slice, opposite direction state_cache |
@@ -130,11 +127,9 @@ Rows: 56. Correct: 51. Perf misses (ratio < 0.95): 25.
 
 ## Perf misses
 
-A row is a perf miss when ratio < 0.95.
-
 - `bitmask/b512_v129280_ftp` ratio 0.492. PTO broadcasts the mask with vload+vbrc and walks the left bits serially; ASC uses BRC_B32. has_ftp, step 0, one row per request
-- `candidate/block_max` ratio 0.317. Block max is a grouped vcmax over bf16 tiles. ASC reduces the same tile with packed vmax. rows=256 valid_len=65536 block=16
-- `candidate/restore_indices` ratio 0.674. Restore gathers block ids with vgather; ASC uses vgather2. rows=128 topk_tokens=1024 topk_blocks=128 block=16 offset=1
+- `candidate/block_max` ratio 0.317. Block max converts 128 bf16 lanes to f32, then one grouped vcmax. vcmax rejects bf16, and the ASC even/odd split is a part= convert. rows=256 valid_len=65536 block=16
+- `candidate/restore_indices` ratio 0.707. Restore gathers block ids with a full-mask vgather unrolled across the token block. ASC uses vgather2. rows=128 topk_tokens=1024 topk_blocks=128 block=16 offset=1
 - `compress/decode` ratio 0.879. Softmax sum is a float vdiv. ASC divides integers. The tile is unchanged. ratio=2 dim=512 seqs=64 nextn=6
 - `cp_mirror/prepare_b4096_c1_2` ratio 0.830. PTO has no dynamic shift, so the binary search is straight-line constant shifts. TILE is unchanged. cp_size 8, cp_rank 7, ratios (1, 2)
 - `dflash/input_store` ratio 0.660. 64 serial f32 iterations. T.unroll(..., unroll_factor=) is rejected on Ascend. n=128 n_embed=4096 hc_mult=4
@@ -144,14 +139,14 @@ A row is a perf miss when ratio < 0.95.
 - `gather/large_d128` ratio 0.604. PTO rejects T.Parallel inside SimdVF, so the zero fill is a 256-lane vbrc+vstore. float32 viewed as int8, D=512; some OOB indexes
 - `image/batch_downsample_concat` ratio 0.653. Concat is a per-element VF. ASC moves the same tile with copies. imgs=8 n_vit=54 dim=1024 ratio=3 downsample=0
 - `image/batch_downsample_pool` ratio 0.920. Pool reduction stays in the VF. ASC is closer to the copy bandwidth of the same tile. imgs=8 n_vit=54 dim=1024 ratio=3 downsample=1
-- `kv_index/paged_n1024_b128` ratio 0.253. Paged gather is vgather. ASC uses vgather2. The SWA path, which is copies, matches. index_length 8192, block_size 128, in-bounds tables
-- `kv_index_cat/q16384_w128_k1024` ratio 0.686. Explicitly unrolled VF on a bandwidth-bound index cat. The tile is unchanged. largest _KV_INDEX_CAT_CASES row
+- `kv_index/paged_n1024_b128` ratio 0.267. Paged gather is a full-mask vgather, which lowers to one vgather2_bc. The remaining gap is the serial 128-vector carry. index_length 8192, block_size 128, in-bounds tables
+- `kv_index_cat/q16384_w128_k1024` ratio 0.686. The two-vector add/select stays explicitly unrolled. A serial loop matching ASC was slower, so the tile is unchanged. largest _KV_INDEX_CAT_CASES row
 - `load_kv/v41_fp4` ratio 0.329. Dequant is a 64-lane vselr table plus a grouped scale broadcast. ASC uses packed SIMD. block=64 tokens=4096 pattern=aligned layout=V41, FP4 main kv.
 - `load_kv/v41_fp8` ratio 0.429. Dequant reloads the scale through a grouped vload+vbrc. ASC uses a broadcast load. block=64 tokens=4096 pattern=aligned layout=V41, main/swa kv.
 - `norm/bf16` ratio 0.294. One row per VF. Multi-row plus the compensated rstd exceeds the layout search. Hidden 7168 is unchanged. tokens=32768 hidden=7168 residual=False fp8=False
 - `norm/bf16_residual` ratio 0.414. One row per VF, same layout-search limit as the plain bf16 row. Hidden 7168 is unchanged. tokens=32768 hidden=7168 residual=True fp8=False
 - `sampler/get_accept_result` ratio 0.926. Same SIMT accept scan. The medians differ by under a microsecond. total_q 256, has_golden, request length 16
-- `sampler/remap_draft_topk` ratio 0.402. Remap gathers with vgather. ASC uses vgather2. total_q 256, force_topk 1024, vocab 129280, pool 43136
+- `sampler/remap_draft_topk` ratio 0.412. Remap gathers with a full-mask vgather over an unrolled 16-vector lookup. ASC uses vgather2. total_q 256, force_topk 1024, vocab 129280, pool 43136
 - `schedule/n1024_nextn7` ratio 0.901. The rank is a full-vector broadcast of vcadd. A 1-lane vadd is not a legal vreg. bench nextn=7, total_q=(1+nextn)*num_seqs*0.95; total_q is a scalar input
 - `store_kv/bf16` ratio 0.930. Same copy schedule. The medians differ by about 7us on a 100us kernel. block=64 tokens=8192 layout=BF16 KV.
 - `store_kv/v41_fp4` ratio 0.305. Quant spills the inverse, widens the LUT to 64 lanes for vselr, then stores with a narrow mask. block=64 tokens=4096 layout=V41, FP4 main kv.

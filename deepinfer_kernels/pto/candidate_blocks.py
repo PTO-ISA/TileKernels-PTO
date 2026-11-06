@@ -210,6 +210,7 @@ def candidate_block_max_tl(max_model_len: int, block_size: int) -> Any:
                             for group_lane in T.unroll(4, explicit=True):
                                 group = group_tile * 4 + group_lane
                                 if block_size == 16:
+                                    # vcmax rejects bf16. Convert, then one maximum per 16-wide block.
                                     values = V.vcvt(V.vload(logits_ub[group * 128], size=128), "float32")
                                     maxima = V.vcmax(values, wide, group=8)
                                 else:
@@ -331,17 +332,18 @@ def restore_candidate_indices_inplace_tl(topk_tokens: int, topk_blocks: int, blo
                 with T.SimdVF():
                     full = V.create_mask(64, size=64)
                     neg_one = V.vbrc(T.int32(-1), size=64)
+                    zero_slot = V.vbrc(T.uint32(0), size=64)
                     remainder_mask = V.vbrc(T.int32(block_size - 1), size=64)
                     restored = V.alloc_var(T.int32, size=64)
                     for r in T.serial(rows):
                         if has_offset:
                             offset = V.vbrc(V.vload(offsets_ub[r], size=1), size=64)
-                        for vector in T.serial(T.ceildiv(copy_len, 64)):
+                        for vector in T.unroll(block // 64, explicit=True):
                             index = V.vload(indices_ub[r, vector * 64], size=64)
                             slot = V.vshrs(V.vinterpret_cast(index, "uint32"), block_bits, full)
                             nonnegative = V.vcmps(index, T.int32(0), full, "ge")
                             in_bounds = V.vcmps(slot, T.uint32(topk_blocks), nonnegative, "lt")
-                            block_id = V.vgather(candidates_ub[r, 0], slot, in_bounds)
+                            block_id = V.vgather(candidates_ub[r, 0], V.vsel(in_bounds, slot, zero_slot), full)
                             valid = V.vand(in_bounds, V.vcmps(block_id, T.int32(0), full, "ge"))
                             remainder = V.vand(index, remainder_mask, full)
                             restored = V.vadd(V.vshls(block_id, block_bits, full), remainder, full)
