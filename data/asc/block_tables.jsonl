@@ -1,0 +1,1 @@
+{"family": "block_tables", "name": "n256_q8_b4096", "device": 1, "notes": "full max_num_blocks rows", "correct": true, "compared": "block_tables_out", "io_bytes": 37751812, "asc_us": 11.3855, "pto_us": 10.7455, "ratio": 1.05955981573682, "asc_gbs": 3315.779895481094, "pto_gbs": 3513.267135079801}

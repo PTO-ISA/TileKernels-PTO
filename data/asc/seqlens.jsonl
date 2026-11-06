@@ -1,0 +1,1 @@
+{"family": "seqlens", "name": "n1024_nextn3", "device": 1, "notes": "half the rows remapped; in-place seqlens_k", "correct": true, "compared": "seqlens_k", "io_bytes": 20544, "asc_us": 2.8995, "pto_us": 3.039, "ratio": 0.9540967423494571, "asc_gbs": 7.085359544749094, "pto_gbs": 6.760118460019743}
