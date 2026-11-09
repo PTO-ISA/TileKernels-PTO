@@ -8,6 +8,10 @@ The TileKernels-PTO base is `vmi-impl` at `f4e8fc8`:
 
 https://github.com/PTO-ISA/TileKernels-PTO/commit/f4e8fc8
 
+The TileLang frontend is branch `pto-dev` at `479d5cd1acfbd31bcd750b728e992409d5cbb175`:
+
+https://github.com/PTO-ISA/tilelang/commit/479d5cd1acfbd31bcd750b728e992409d5cbb175
+
 This directory is the gather kernel only. `asc.py` is the ASC baseline. `pto.py` is the VMI port. `bench.py` rebuilds the int8 view, checks the outputs, and appends msprof rows to `results/gather.jsonl`.
 
 ## Shape
