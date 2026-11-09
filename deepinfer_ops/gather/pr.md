@@ -38,7 +38,7 @@ Both styles use one `V.vbrc` and one unmasked `V.vstore` over 256-byte chunks. T
 
 `style="patched"` is the same source as `single`: one `T.alloc_shared`. Release 0.72 inserts `pto.mem_bar "VST_VST"` because `(version & 1) * 125952` is not affine in the chunk induction variable. The patched compiler treats a value defined outside those induction variables as an exact invariant symbol. The existing mul-by-constant rule makes `(version & 1) * 125952` one symbol. When both accesses of a carried pair use that symbol at the same coefficient, and the address cannot wrap the index width, the symbol cancels and overlap is tested on `chunk * 256` alone. A mismatched coefficient, or an address that can wrap, still emits the barrier.
 
-On that compiler the fill lowers to one `pto.vsts` per chunk and no `VST_VST`. Paired with a fresh ASC timing, the kernel is 44.80 / 48.82 µs, ratio 0.918, and it matches the ASC parallel output. The two-slot spelling is the workaround that release 0.72 can compile today. The patch is [PTOAS#TODO](https://github.com/hw-native-sys/PTOAS/pull/TODO).
+On that compiler the fill lowers to one `pto.vsts` per chunk and no `VST_VST`. Paired with a fresh ASC timing, the kernel is 44.80 / 48.82 µs, ratio 0.918, and it matches the ASC parallel output. The two-slot spelling is the workaround that release 0.72 can compile today. The patch is [PTOAS#1741](https://github.com/hw-native-sys/PTOAS/pull/1741).
 
 | style | ASC us | PTO us | ratio | ptoas |
 | --- | ---: | ---: | ---: | --- |
