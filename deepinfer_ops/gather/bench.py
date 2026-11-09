@@ -43,8 +43,8 @@ import torch  # noqa: E402
 import torch_npu  # noqa: E402, F401
 from tilelang.profiler import do_bench  # noqa: E402
 
-from deepinfer_ops.gather.asc import gather_tl as gather_asc  # noqa: E402
-from deepinfer_ops.gather.pto import gather_tl as gather_pto  # noqa: E402
+from deepinfer_ops.gather.gather_asc import gather_tl as gather_asc  # noqa: E402
+from deepinfer_ops.gather.gather_pto import gather_tl as gather_pto  # noqa: E402
 
 RESULTS = Path(__file__).resolve().parent / "results" / "gather.jsonl"
 M = N = 131072

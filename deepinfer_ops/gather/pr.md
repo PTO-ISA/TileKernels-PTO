@@ -1,18 +1,12 @@
 # Gather on PTO VMI
 
-Port of DeepInfer `gather.py` at `a679bb86ce36e883a98a97733492b686e5b9a08e`:
+Port of DeepInfer [`gather.py`](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc/gather.py) at [`a679bb86`](https://github.com/deepseek-ai/DeepInfer/commit/a679bb86ce36e883a98a97733492b686e5b9a08e).
 
-https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc/gather.py
+The TileKernels-PTO base is [`vmi-impl`](https://github.com/PTO-ISA/TileKernels-PTO/tree/vmi-impl) at [`f4e8fc8`](https://github.com/PTO-ISA/TileKernels-PTO/commit/f4e8fc8).
 
-The TileKernels-PTO base is `vmi-impl` at `f4e8fc8`:
+The TileLang frontend is branch [`pto-dev`](https://github.com/PTO-ISA/tilelang/tree/pto-dev) at [`479d5cd1`](https://github.com/PTO-ISA/tilelang/commit/479d5cd1acfbd31bcd750b728e992409d5cbb175).
 
-https://github.com/PTO-ISA/TileKernels-PTO/commit/f4e8fc8
-
-The TileLang frontend is branch `pto-dev` at `479d5cd1acfbd31bcd750b728e992409d5cbb175`:
-
-https://github.com/PTO-ISA/tilelang/commit/479d5cd1acfbd31bcd750b728e992409d5cbb175
-
-This directory is the gather kernel only. `asc.py` is the ASC baseline. `pto.py` is the VMI port. `bench.py` rebuilds the int8 view, checks the outputs, and appends msprof rows to `results/gather.jsonl`.
+This directory is the gather kernel only. `gather_asc.py` is the ASC baseline. `gather_pto.py` is the VMI port. `bench.py` rebuilds the int8 view, checks the outputs, and appends msprof rows to `results/gather.jsonl`.
 
 ## Shape
 
@@ -27,9 +21,7 @@ This directory is the gather kernel only. `asc.py` is the ASC baseline. `pto.py`
 | parallel | 44.67 | 1 |
 | simd | 44.33 | 0.992 |
 
-## PTO, release ptoas 0.72
-
-https://github.com/hw-native-sys/PTOAS/releases/tag/v0.72
+## PTO, release [ptoas 0.72](https://github.com/hw-native-sys/PTOAS/releases/tag/v0.72)
 
 Both styles use one `V.vbrc` and one unmasked `V.vstore` over 256-byte chunks. That is the VMI spelling of the ASC `vsts` loop. The indexed `T.copy` is unchanged.
 
@@ -46,9 +38,7 @@ Both styles use one `V.vbrc` and one unmasked `V.vstore` over 256-byte chunks. T
 
 `style="patched"` is the same source as `single`: one `T.alloc_shared`. Release 0.72 inserts `pto.mem_bar "VST_VST"` because `(version & 1) * 125952` is not affine in the chunk induction variable. The patched compiler treats a value defined outside those induction variables as an exact invariant symbol. The existing mul-by-constant rule makes `(version & 1) * 125952` one symbol. When both accesses of a carried pair use that symbol at the same coefficient, and the address cannot wrap the index width, the symbol cancels and overlap is tested on `chunk * 256` alone. A mismatched coefficient, or an address that can wrap, still emits the barrier.
 
-On that compiler the fill lowers to one `pto.vsts` per chunk and no `VST_VST`. Paired with a fresh ASC timing, the kernel is 44.80 / 48.82 µs, ratio 0.918, and it matches the ASC parallel output. The two-slot spelling is the workaround that release 0.72 can compile today. The patch is:
-
-https://github.com/hw-native-sys/PTOAS/pull/TODO
+On that compiler the fill lowers to one `pto.vsts` per chunk and no `VST_VST`. Paired with a fresh ASC timing, the kernel is 44.80 / 48.82 µs, ratio 0.918, and it matches the ASC parallel output. The two-slot spelling is the workaround that release 0.72 can compile today. The patch is [PTOAS#TODO](https://github.com/hw-native-sys/PTOAS/pull/TODO).
 
 | style | ASC us | PTO us | ratio | ptoas |
 | --- | ---: | ---: | ---: | --- |
