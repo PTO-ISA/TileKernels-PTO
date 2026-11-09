@@ -35,7 +35,9 @@ Device runs used `BENCH_REP=10`. None of the kept spellings reached 0.95. The lo
 
 ## Medium
 
-- `gather/large_d128`. Replacing the in-VF zero with a copy of one prefilled zero row: ASC 45.15 µs, PTO 7626.23 µs, ratio 0.006. Dropped. The 256-lane `vbrc`+`vstore` stays. Ratio 0.604. `T.Parallel` inside `SimdVF` stays illegal. Unrolling the ~246-row fill is not a smaller spelling.
+- `gather/large_d128`. Replacing the in-VF zero with a copy of one prefilled zero row: ASC 45.15 µs, PTO 7626.23 µs, ratio 0.006. Dropped.
+- `gather/large_d128` ASC `zero_fill="simd"`. Explicit `pset` + `vdup` + one `vsts` loop versus the `T.Parallel` sugar: 44.61 µs versus 44.66 µs, ratio 1.001. Same result. The default published body stays the sugar.
+- `gather/large_d128` PTO. One unmasked `vstore` over 256-byte chunks, `vbrc` once. Kept. ASC 44.56 µs, PTO 65.06 µs, ratio 0.685 (was 74.33 µs / 0.604). The double `T.serial` masked store stays out.
 - `image/batch_downsample_concat`. Hoisted scatter ramp and unrolled the vector loop. Kept. ASC 126.49 µs, PTO 191.88 µs, ratio 0.659 (was 193.92 µs / 0.653). Both sides already `vscatter`. The report line that said ASC uses copies was wrong.
 - `dflash/input_store`. `T.unroll(explicit=True)` over 64 chunks: ASC 3.65 µs, PTO 5.87 µs, ratio 0.621 (was 5.67 µs / 0.660). Dropped. The serial loop stays.
 - `cp_mirror`, `compress/decode`, `schedule`. No spelling change. Constant shifts stay. `vbrc(vcadd)` stays. Compress divides in float on both sides. Ratios 0.830, 0.879, 0.901.

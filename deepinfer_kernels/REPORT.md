@@ -83,7 +83,7 @@ Their ratio is not a saturated prefill measurement.
 | fused_sample | b256_v1024_reject | no |  |  |  |  |  | Same extui rejection as the non-reject row. The unsigned prefix spelling was not recompiled. RuntimeError: PTO lowering failed for kernels ['_fused_sample_kernel']. |
 | fused_transform | norm_fp8_h8_d128_n1024 | yes | 13.47 | 21.48 | 0.627 | 236.06 | 147.98 | perf The eight grouped maxima are parked with one 8-lane store and reloaded. The per-lane vcadd extract is gone. norm + e4m3 ue8m0 group 32; KV-cache store skipped: store_cache requires num_heads==1 and a paged slot_mapping; num_heads=8 quant,sf |
 | fused_transform | norm_rope_h8_d128_n4096 | yes | 21.97 | 24.45 | 0.899 | 812.03 | 729.74 | perf Same VF as ASC. No extra vcvt or vdiv turned up, so the tile is unchanged. bf16 norm+rope, rotary 64; KV-cache store skipped: store_cache requires num_heads==1 and a paged slot_mapping; num_heads=8 bf16 |
-| gather | large_d128 | yes | 44.92 | 74.33 | 0.604 | 2999.59 | 1812.70 | perf The zero fill stays a 256-lane vbrc+vstore inside the VF. Copying one prefilled zero row was about 100x slower. float32 viewed as int8, D=512; some OOB indexes Y |
+| gather | large_d128 | yes | 44.56 | 65.06 | 0.685 | 3023.64 | 2071.06 | perf One unmasked vstore loop. The vbrc lowers to vdup, the same broadcast ASC uses for the fill. float32 viewed as int8, D=512; some OOB indexes Y |
 | gather | small_d4 | yes | 6.49 | 6.64 | 0.977 | 727.30 | 710.28 | float32 viewed as int8, D=16; some OOB indexes Y |
 | gather_engram | n1024_nextn5 | yes | 8.47 | 8.88 | 0.953 | 70.10 | 66.83 | max_ngram_size 4, old_ratio 0.9, vocab 100000 out_ngram_token_ids |
 | gather_ids | n1024_nextn7 | yes | 4.20 | 4.18 | 1.006 | 25.52 | 25.68 | old_ratio 0.9 out_input_ids |
@@ -136,7 +136,7 @@ Rows: 56. Correct: 51. Perf misses (ratio < 0.95): 25.
 - `flash_mla/b256_k1024_full` ratio 0.947. Same SIMT body. The rebench stays under 0.95 on a 7us kernel, so the residual is launch and measurement. in-place topk; full context; block_size 16
 - `fused_transform/norm_fp8_h8_d128_n1024` ratio 0.627. The eight grouped maxima are parked with one 8-lane store and reloaded. The per-lane vcadd extract is gone. norm + e4m3 ue8m0 group 32; KV-cache store skipped: store_cache requires num_heads==1 and a paged slot_mapping; num_heads=8
 - `fused_transform/norm_rope_h8_d128_n4096` ratio 0.899. Same VF as ASC. No extra vcvt or vdiv turned up, so the tile is unchanged. bf16 norm+rope, rotary 64; KV-cache store skipped: store_cache requires num_heads==1 and a paged slot_mapping; num_heads=8
-- `gather/large_d128` ratio 0.604. The zero fill stays a 256-lane vbrc+vstore inside the VF. Copying one prefilled zero row was about 100x slower. float32 viewed as int8, D=512; some OOB indexes
+- `gather/large_d128` ratio 0.685. One unmasked vstore loop. The vbrc lowers to vdup, the same broadcast ASC uses for the fill. float32 viewed as int8, D=512; some OOB indexes
 - `image/batch_downsample_concat` ratio 0.659. The scatter index ramp is hoisted and the vector loop is unrolled. Both sides already scatter. imgs=8 n_vit=54 dim=1024 ratio=3 downsample=0
 - `image/batch_downsample_pool` ratio 0.922. Pool uses a whole-vector vcvt. The body matches ASC aside from part=, and the rebench stays under 0.95. imgs=8 n_vit=54 dim=1024 ratio=3 downsample=1
 - `kv_index/paged_n1024_b128` ratio 0.267. Paged gather is a full-mask vgather, which lowers to one vgather2_bc. The remaining gap is the serial 128-vector carry. index_length 8192, block_size 128, in-bounds tables

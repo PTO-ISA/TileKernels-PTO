@@ -13,7 +13,14 @@ from tilelang.ascend import language as T
         tilelang.PassConfigKey.TL_DISABLE_DATA_RACE_CHECK: True,
     },
 )
-def gather_tl(D: int, dtype: torch.dtype, index_dtype: torch.dtype, x_stride: int) -> Any:
+def gather_tl(
+    D: int,
+    dtype: torch.dtype,
+    index_dtype: torch.dtype,
+    x_stride: int,
+    *,
+    zero_fill: str = "parallel",
+) -> Any:
     """
     Args:
         D: row length in elements (== row bytes when dtype is int8)
@@ -24,7 +31,13 @@ def gather_tl(D: int, dtype: torch.dtype, index_dtype: torch.dtype, x_stride: in
         x: [n, D] contiguous
         index: [m] integer dtype
         y: [m, D] contiguous, y[i] = x[index[i]] if index[i] in [0, n) else 0
+
+    zero_fill:
+        "parallel" keeps the T.Parallel sugar. "simd" writes the lowered
+        pset + vdup + one vsts loop. The published row uses "parallel".
     """
+    if zero_fill not in ("parallel", "simd"):
+        raise ValueError(f"zero_fill must be 'parallel' or 'simd', got {zero_fill!r}")
     n = T.dynamic("n")
     m = T.dynamic("m")
     num_cores = tile_kernels.get_num_vec_cores()
@@ -54,8 +67,17 @@ def gather_tl(D: int, dtype: torch.dtype, index_dtype: torch.dtype, x_stride: in
                     rem = T.min(bm, m - row0)
                     # Initialize the entire tile.
                     with T.SimdVF():
-                        for e in T.Parallel(bm * d_simd):
-                            stage[e // d_simd, e % d_simd] = T.cast(0, dtype)
+                        if zero_fill == "simd":
+                            # Same ops AscendSimdVFLowerParallel emits for the
+                            # sugar: one vdup, then one 256-byte vsts per chunk.
+                            full = T.simd.pset(8)
+                            zero = T.simd.vdup(T.int8(0), "int8", full)
+                            flat = T.view(stage, (bm * d_simd,), dtype)
+                            for chunk in T.serial((bm * d_simd) // 256):
+                                T.simd.vsts(flat[chunk * 256], zero, full)
+                        else:
+                            for e in T.Parallel(bm * d_simd):
+                                stage[e // d_simd, e % d_simd] = T.cast(0, dtype)
                     # per-row dynamic-index MTE reads (index as scalar GM load)
                     for b in T.serial(bm):
                         if b < rem:

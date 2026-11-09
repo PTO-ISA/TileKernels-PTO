@@ -53,15 +53,13 @@ def gather_tl(D: int, dtype: torch.dtype, index_dtype: torch.dtype, x_stride: in
                 for blk in T.Persistent([T.ceildiv(m, bm)], num_cores, pid, group_size=1, num_stages=num_stages):
                     row0 = blk * bm
                     rem = T.min(bm, m - row0)
-                    # Initialize the entire tile. PTO rejects the ASC scalar
-                    # T.Parallel fill (it writes a local.var). A 256-lane
-                    # int8 vstore is the same zeroing of the padded row.
+                    # One unmasked vstore per 256-byte chunk. vbrc lowers to vdup,
+                    # and the aligned store lowers to the same vsts as ASC.
                     with T.SimdVF():
                         zero = V.vbrc(T.cast(0, dtype), size=256)
-                        mask = V.create_mask(256, size=256)
-                        for row in T.serial(bm):
-                            for col in T.serial(d_simd // 256):
-                                V.vstore(zero, stage[row, col * 256], mask)
+                        flat = T.view(stage, (bm * d_simd,), dtype)
+                        for chunk in T.serial((bm * d_simd) // 256):
+                            V.vstore(zero, flat[chunk * 256])
                     # per-row dynamic-index MTE reads (index as scalar GM load)
                     for b in T.serial(bm):
                         if b < rem:

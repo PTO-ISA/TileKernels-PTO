@@ -33,7 +33,7 @@ CAUSES = {
     "flash_mla/b256_k1024_full": "Same SIMT body. The rebench stays under 0.95 on a 7us kernel, so the residual is launch and measurement.",
     "fused_transform/norm_fp8_h8_d128_n1024": "The eight grouped maxima are parked with one 8-lane store and reloaded. The per-lane vcadd extract is gone.",
     "fused_transform/norm_rope_h8_d128_n4096": "Same VF as ASC. No extra vcvt or vdiv turned up, so the tile is unchanged.",
-    "gather/large_d128": "The zero fill stays a 256-lane vbrc+vstore inside the VF. Copying one prefilled zero row was about 100x slower.",
+    "gather/large_d128": "One unmasked vstore loop. The vbrc lowers to vdup, the same broadcast ASC uses for the fill.",
     "image/batch_downsample_concat": "The scatter index ramp is hoisted and the vector loop is unrolled. Both sides already scatter.",
     "image/batch_downsample_pool": "Pool uses a whole-vector vcvt. The body matches ASC aside from part=, and the rebench stays under 0.95.",
     "kv_index/paged_n1024_b128": "Paged gather is a full-mask vgather, which lowers to one vgather2_bc. The remaining gap is the serial 128-vector carry.",
