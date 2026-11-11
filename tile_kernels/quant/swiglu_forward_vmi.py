@@ -126,6 +126,11 @@ def get_swiglu_forward_kernel_vmi(
         else:
             certificate_min = None
             certificate_max = None
+        if out_config.with_sf and logical_size == 64:
+            amax_acc = V.alloc_local((4,), V.vreg(logical_size, T.float32))
+            for acc_sub in T.unroll(4, explicit=True):
+                amax_acc[acc_sub] = zeros
+
         for tile_id in T.serial(T.ceildiv(logical_vectors, compute_unroll)):
             for sub in T.unroll(compute_unroll, explicit=True):
                 vector_id = tile_id * compute_unroll + sub
@@ -169,8 +174,20 @@ def get_swiglu_forward_kernel_vmi(
                         acc[1] = V.vadd(acc[1], V.vsel(clamped_mask_1, one, zeros))
                         acc[2] = V.vadd(acc[2], V.vsel(clamped_mask_2, one, zeros))
                     if out_config.with_sf:
-                        amax = V.vcmax(V.vabs(out_val), full, group=logical_size // 32)
-                        V.vstore(amax, amax_ub[vector_id * (logical_size // 32)])
+                        if logical_size == 64:
+                            amax_acc[sub] = V.vabs(out_val)
+                        else:
+                            amax = V.vcmax(V.vabs(out_val), full, group=logical_size // 32)
+                            V.vstore(amax, amax_ub[vector_id * (logical_size // 32)])
+            if out_config.with_sf and logical_size == 64:
+                low01, high01 = V.vdintlv(amax_acc[0], amax_acc[1], full)
+                low23, high23 = V.vdintlv(amax_acc[2], amax_acc[3], full)
+                compressed01 = V.vmax(low01, high01, full)
+                compressed23 = V.vmax(low23, high23, full)
+                low, high = V.vdintlv(compressed01, compressed23, full)
+                combined = V.vmax(low, high, full)
+                amax = V.vcmax(combined, full, group=8)
+                V.vstore(amax, amax_ub[tile_id * 8])
         if count_clamp:
             for i in T.unroll(3, explicit=True):
                 V.vstore(V.vadd(V.vload(pacc_buf[i, 0], size=logical_size), acc[i]), pacc_buf[i, 0])
