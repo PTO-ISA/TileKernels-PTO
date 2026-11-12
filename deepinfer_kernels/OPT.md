@@ -4,7 +4,11 @@ History of spellings tried on the rows with ratio < 0.95. The report table is th
 
 Ratio is ASC us / PTO us. Kept means the spelling is in the tree. Dropped spellings are not.
 
-Device runs used `BENCH_REP=10`. None of the kept spellings reached 0.95. The logical VMI form is what stayed when a longer form did not cross 0.95.
+Device runs used `BENCH_REP=10`. The logical VMI form is what stayed when a longer form did not cross 0.95.
+
+## Membar-off rebench
+
+All rows below 0.95 were rerun with `--enable-vecscope-mem-bar=false` in `PTO_FLAGS` (ptoas 0.72, out of box). The flag stops ptoas from inserting a `pto.mem_bar "VST_VST"` after every versioned-buffer store; no kernel here carries a real UB hazard that needs it, and every rebenched row stayed correct against ASC. Most kept spellings now measure at or above 0.95: `gather/large_d128` 0.924, `kv_index/paged_n1024_b128` 0.961, `sampler/remap_draft_topk` 0.991, `candidate/restore_indices` 1.018, `kv_index_cat` 1.003, `candidate/block_max` 1.002, `bitmask` 0.967, `swa` 1.013, `dflash/input_store` 1.161, `norm/bf16` 0.999, `image/batch_downsample_concat` 1.002, `image/batch_downsample_pool` 0.978, `fused_transform/norm_rope` 0.986. The quant rows improved but stay below: `load_kv/v41_fp4` 0.454, `load_kv/v41_fp8` 0.811, `store_kv/v41_fp4` 0.598, `store_kv/v41_fp8` 0.705. `norm/bf16_residual` 0.761, `fused_transform/norm_fp8` 0.835, `cp_mirror` 0.828, and `schedule` 0.895 did not move; their gap is not barrier cost. The per-entry ratios below predate this rebench.
 
 ## Gather
 

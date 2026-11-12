@@ -12,7 +12,10 @@ export CCACHE_DIR="${CCACHE_DIR:-/home/jzhuang/work_dir/.ccache}"
 # level3 matches the TileKernels-vmi on-device runs. The default VMI layout
 # frontier (288) cannot schedule the norm VF; raise it so the ASC schedule
 # still lowers. Kernels that fit in 288 stop at the same layout.
-export PTO_FLAGS="${PTO_FLAGS:---pto-backend=vpto --pto-level=level3 --vmi-layout-max-frontier-entries=65536 --vmi-layout-max-transitions=262144}"
+# --enable-vecscope-mem-bar=false stops ptoas 0.72 from inserting a
+# VST_VST barrier after every versioned-buffer store; the kernels carry no
+# real UB hazard that needs it, and the barrier cost rows 0.3-0.7x of ASC.
+export PTO_FLAGS="${PTO_FLAGS:---pto-backend=vpto --pto-level=level3 --vmi-layout-max-frontier-entries=65536 --vmi-layout-max-transitions=262144 --enable-vecscope-mem-bar=false}"
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 cd "${ROOT}"
 exec "$@"
