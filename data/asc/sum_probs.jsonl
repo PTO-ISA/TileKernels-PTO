@@ -1,0 +1,1 @@
+{"family": "sum_probs", "name": "b512_v129280", "device": 1, "notes": "normalized logprobs, vocab 129280", "correct": true, "compared": "output", "io_bytes": 264769536, "asc_us": 87.0184, "pto_us": 85.5313, "ratio": 1.0173866175306583, "asc_gbs": 3042.6844897171177, "pto_gbs": 3095.586481206295}
