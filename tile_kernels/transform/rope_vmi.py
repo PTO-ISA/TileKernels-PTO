@@ -110,11 +110,11 @@ def get_rope_kernel_vmi(
                 token_start = token_block * block_tokens
                 rows = T.min(block_tokens, seqlen - token_start)
                 if can_bulk_copy:
-                    T.copy(x[batch_id, token_start, 0, 0], x_ub[:rows, :, :])
+                    T.copy(x[batch_id, token_start, 0, 0], x_ub[:rows, :, :], l2_cache_ctrl='NOTALLOC_KEEP')
                 else:
                     for row in T.serial(block_tokens):
                         if row < rows:
-                            T.copy(x[batch_id, token_start + row, 0, 0], x_ub[row, :, :])
+                            T.copy(x[batch_id, token_start + row, 0, 0], x_ub[row, :, :], l2_cache_ctrl='NOTALLOC_KEEP')
                 if has_position_tensor:
                     for row in T.serial(block_tokens):
                         if row < rows:
