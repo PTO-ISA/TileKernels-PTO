@@ -248,3 +248,24 @@ def test_swiglu_backward_and_per_token_cast_benchmark(benchmark_timer, benchmark
         time_us=t_us,
         bandwidth_gbs=num_bytes / t_us / 1e3,
     )
+
+
+@pytest.mark.skipif(not is_ascend(), reason='VMI requires Ascend')
+@pytest.mark.parametrize('hidden', [128, 384, 4096, 6144])
+@pytest.mark.parametrize('col_major,round_sf,packed', [(False, False, False), (False, True, False), (True, True, True)])
+def test_swiglu_backward_vmi_scale_expansion(monkeypatch, hidden, col_major, round_sf, packed):
+    # One valid token plus alignment padding keeps the layout tests small.
+    # hidden=6144 also exercises accumulation across two hidden blocks.
+    import tile_kernels.quant.swiglu_backward_asc as asc
+    from tile_kernels.quant.swiglu_backward_vmi import get_swiglu_backward_kernel_vmi
+
+    monkeypatch.setenv('TK_PRECOMPILE', '1')
+    monkeypatch.setattr(asc, 'get_swiglu_backward_kernel_asc', get_swiglu_backward_kernel_vmi)
+    params = {
+        **generate_test_params(0)[0],
+        'hidden': hidden,
+        'use_tma_aligned_col_major_sf': col_major,
+        'round_sf': round_sf,
+        'use_packed_ue8m0': packed,
+    }
+    test_swiglu_backward_and_per_token_cast(params)

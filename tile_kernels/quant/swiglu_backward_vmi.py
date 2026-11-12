@@ -107,8 +107,8 @@ def get_swiglu_backward_kernel_vmi(
         residual_sum = V.vadd(residual, adjacent_residual, full)
         take_bits_plus = V.vcmps(residual_sum, T.float32(0.0), full, 'gt')
         is_nonzero = V.vcmps(z, T.float32(0.0), full, 'ne')
-        # VMI mask logic has no predication-mask form;
-        # ASC pxor(a, b, mask) is (a XOR b) AND mask, so emit the explicit mask-and.
+        # Preserve signed zero. PTOAS can fold this AND into PXOR's
+        # governing predicate without changing the VMI mask semantics.
         take_adjacent = V.vand(V.vxor(take_bits_plus, use_bits_minus), is_nonzero)
         return V.vsel(take_adjacent, adjacent, z)
 
@@ -129,6 +129,19 @@ def get_swiglu_backward_kernel_vmi(
         quant_max = V.vbrc(T.float32(448.0), size=vec_size)
         return V.vdiv(clamped_amax, quant_max, full, precision='exact'), V.vdiv(quant_max, clamped_amax, full, precision='exact')
 
+
+    @T.macro
+    def store_fourfold_expanded(dst, offset, value):
+        # E2B_B32 repeats each of eight input lanes over eight output lanes.
+        # Expand each block32 scale fourfold to cover 32 output lanes.
+        full = V.create_mask(vec_size, size=vec_size)
+        lo, hi = V.vintlv(value, value, full)
+        v0, v1 = V.vintlv(lo, lo, full)
+        v2, v3 = V.vintlv(hi, hi, full)
+        V.vstore(v0, dst[offset])
+        V.vstore(v1, dst[offset + vec_size])
+        V.vstore(v2, dst[offset + vec_size * 2])
+        V.vstore(v3, dst[offset + vec_size * 3])
 
     @T.macro
     def init_transpose_indices(indices):
@@ -301,21 +314,29 @@ def get_swiglu_backward_kernel_vmi(
                         T.copy(act_x_grad[token_id, col_offset : col_offset + block_k], grad_ub)
 
                         with T.SimdVF():
+                            if with_quant:
+                                for scale_vector in range(num_scale_vectors):
+                                    scale_offset = scale_vector * vec_size
+                                    store_fourfold_expanded(x_quant_scratch_ub, scale_offset * 4, V.vload(x_sf_ub[scale_offset], size=vec_size))
+                                    store_fourfold_expanded(y_quant_scratch_ub, scale_offset * 4, V.vload(y_sf_ub[scale_offset], size=vec_size))
+                                S.mem_bar('VST_VLD')
                             full = V.create_mask(vec_size, size=vec_size)
                             ones = V.vbrc(T.float32(1.0), size=vec_size)
                             zeros = V.vbrc(T.float32(0.0), size=vec_size)
                             if with_weight:
                                 weight_acc = V.alloc_var(T.float32, size=vec_size)
-                                weight_acc = zeros if hidden_block == 0 else V.vload(weight_acc_ub[row, 0], size=vec_size)
+                                if hidden_block == 0:
+                                    weight_acc = zeros
+                                else:
+                                    weight_acc = V.vload(weight_acc_ub[row, 0], size=vec_size)
 
                             for vector in T.serial(block_k // vec_size):
                                 col = vector * vec_size
                                 if with_quant:
-                                    # ASC loads these two per-group scales with one E2B broadcast load (S.vld(..., dist='E2B_B32')).
-                                    # VMI vload has no E2B mode, so it is split into a 2-lane load plus vbrc(group=2)
-                                    # Paying one extra vbrc per scale per 64-lane iteration.
-                                    x_scale = V.vbrc(V.vload(x_sf_ub[vector * 2], size=2, group=2, stride=1), size=vec_size, group=2)
-                                    y_scale = V.vbrc(V.vload(y_sf_ub[vector * 2], size=2, group=2, stride=1), size=vec_size, group=2)
+                                    # Fourfold expansion gives eight contiguous groups per
+                                    # vector, which PTOAS fuses into one E2B_B32 load.
+                                    x_scale = V.vbrc(V.vload(x_quant_scratch_ub[vector * 8], size=8), size=vec_size, group=8)
+                                    y_scale = V.vbrc(V.vload(y_quant_scratch_ub[vector * 8], size=8), size=vec_size, group=8)
                                     x_raw = V.vcvt(V.vload(x_ub[col], size=vec_size), 'float32')
                                     y_raw = V.vcvt(V.vload(y_ub[col], size=vec_size), 'float32')
                                     x_value = V.vmul(x_raw, x_scale)
@@ -390,12 +411,15 @@ def get_swiglu_backward_kernel_vmi(
                                 if num_experts:
                                     valid_token_vec = V.vbrc(valid_token_f32, size=vec_size)
 
-                                for scale_vector in range(num_scale_vectors):
+                                # Expanded inverse stores overlap compact amax. Work
+                                # backwards so unread amax is never overwritten.
+                                for scale_vector_index in range(num_scale_vectors):
+                                    scale_vector = num_scale_vectors - 1 - scale_vector_index
                                     scale_offset = scale_vector * vec_size
                                     x_scale_value, x_inv = get_scale_and_inverse(V.vload(x_quant_scratch_ub[scale_offset], size=vec_size))
                                     y_scale_value, y_inv = get_scale_and_inverse(V.vload(y_quant_scratch_ub[scale_offset], size=vec_size))
-                                    V.vstore(x_inv, x_quant_scratch_ub[scale_offset])
-                                    V.vstore(y_inv, y_quant_scratch_ub[scale_offset])
+                                    store_fourfold_expanded(x_quant_scratch_ub, scale_offset * 4, x_inv)
+                                    store_fourfold_expanded(y_quant_scratch_ub, scale_offset * 4, y_inv)
                                     x_scale_out = V.vmul(x_scale_value, valid_token_vec) if num_experts else x_scale_value
                                     y_scale_out = V.vmul(y_scale_value, valid_token_vec) if num_experts else y_scale_value
                                     if out_config.use_packed_ue8m0:
@@ -419,11 +443,9 @@ def get_swiglu_backward_kernel_vmi(
                                     valid_token_mask = V.vcmps(valid_token_vec, T.float32(0.0), full, 'gt')
                                 for vector in T.serial(block_k // vec_size):
                                     col = vector * vec_size
-                                    # Same split as the input-scale load above: ASC uses a single E2B_B32 broadcast load
-                                    # while VMI needs vload(2 lanes) + vbrc
-                                    # paying one extra vbrc per scale per 64-lane iteration.
-                                    x_inv_vec = V.vbrc(V.vload(x_quant_scratch_ub[vector * 2], size=2, group=2, stride=1), size=vec_size, group=2)
-                                    y_inv_vec = V.vbrc(V.vload(y_quant_scratch_ub[vector * 2], size=2, group=2, stride=1), size=vec_size, group=2)
+                                    # Match the expanded input-scale E2B_B32 load.
+                                    x_inv_vec = V.vbrc(V.vload(x_quant_scratch_ub[vector * 8], size=8), size=vec_size, group=8)
+                                    y_inv_vec = V.vbrc(V.vload(y_quant_scratch_ub[vector * 8], size=8), size=vec_size, group=8)
                                     x_grad_quant_value = V.vload(x_grad_f32_ub[col], size=vec_size)
                                     y_grad_quant_value = V.vload(y_grad_f32_ub[col], size=vec_size)
                                     x_scaled_value = V.vmul(x_grad_quant_value, x_inv_vec)
