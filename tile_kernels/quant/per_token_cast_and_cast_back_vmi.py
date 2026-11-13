@@ -105,8 +105,8 @@ def get_per_token_cast_and_cast_back_kernel_vmi(
             values = T.vmi.vload(x_ub[row, col], size=tile_k)
             abs_u16 = T.vmi.vand(T.vmi.vinterpret_cast(values, 'uint16'), abs_mask_u16)
             amax_u16 = T.vmi.vcmax(abs_u16, group=groups)
-            amax_u32 = T.vmi.vcvt(amax_u16, 'uint32')
-            amax = T.vmi.vinterpret_cast(T.vmi.vshls(amax_u32, 16), 'float32')
+            amax_bf16 = T.vmi.vinterpret_cast(amax_u16, 'bfloat16')
+            amax = T.vmi.vcvt(amax_bf16, 'float32')
             T.vmi.vstore(amax, amax_ub[sf_offset], stride=1, group=groups)
         elif num_per_channels == 16 or tile_k == VL:
             values = T.vmi.vload(x_ub[row, col], size=tile_k)
