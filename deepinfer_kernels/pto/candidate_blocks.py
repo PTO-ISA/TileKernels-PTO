@@ -190,13 +190,10 @@ def candidate_block_max_tl(max_model_len: int, block_size: int) -> Any:
             # A zero extent makes Persistent's group-size divisor zero.
             if total_tasks > 0:
                 for task_index in T.Persistent([total_tasks], num_cores, core, group_size=1, num_stages=num_stages):
-                    packed_task = T.alloc_var(
-                        T.uint64, task_records[task_index // tasks_per_row, task_index % tasks_per_row]
-                    )
-                    task = T.cast(packed_task, T.int32)
+                    task = T.alloc_var(T.int32, task_words[task_index, 0])
                     row = task // tasks_per_row
                     block_base = (task % tasks_per_row) * blocks_per_task
-                    valid_len = T.cast(packed_task >> 32, T.int32)
+                    valid_len = T.alloc_var(T.int32, task_words[task_index, 1])
                     count = T.ceildiv(valid_len, block_size)
                     tile_blocks = T.min(blocks_per_task, count - block_base)
                     token_base = block_base * block_size
