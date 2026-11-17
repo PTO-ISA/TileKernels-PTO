@@ -1,0 +1,33 @@
+{
+  "asc": {
+    "msprof_cold_us": 690.93505,
+    "event_cold_median_us": 690.2989745140076,
+    "wall_hot_median_us": 563.320005312562,
+    "manual_event_hot_us": 546.9265747070312,
+    "aiv_cycles": 81281400,
+    "aiv_vec": 0.9987575758100519,
+    "aiv_scalar": 0.0019876872153562607,
+    "aiv_mte2": 7.096325999388965e-06,
+    "aiv_mte3": 3.543253680613837e-06,
+    "event_cold_gbs": 194.8139530334347,
+    "manual_hot_gbs": 245.88286292732437
+  },
+  "pto": {
+    "msprof_cold_us": 60.8355,
+    "event_cold_median_us": 60.78200042247772,
+    "wall_hot_median_us": 75.62001701444387,
+    "manual_event_hot_us": 60.940961837768555,
+    "aiv_cycles": 6864338,
+    "aiv_vec": 0.0,
+    "aiv_scalar": 0.30461773273319204,
+    "aiv_mte2": 0.7463860548967857,
+    "aiv_mte3": 0.1815127992938858,
+    "event_cold_gbs": 2212.494999593139,
+    "manual_hot_gbs": 2206.7238183407735
+  },
+  "correct_after_all_timing": true,
+  "io_bytes": 134479872,
+  "ratio_msprof": 11.357431927082049,
+  "ratio_event_cold": 11.356963734591547,
+  "ratio_manual_hot": 8.974695479257598
+}
