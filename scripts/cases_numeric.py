@@ -207,10 +207,11 @@ def _norm_case(name: str, *, has_residual: bool, fp8: bool) -> BenchCase:
 
 
 def _candidate_block_max_case() -> BenchCase:
-    num_rows, valid_len, block_size = 256, 65536, 16
-    # Kernel width is max_model_len. The bench fixes it at 1<<20 even for a
-    # short valid_len; that row is 512MiB. Use valid_len as the width.
-    max_model_len = valid_len
+    # Benchmark grid point: num_rows 256 is the largest that keeps the full
+    # max_model_len buffer at the 512 MiB harness cap (one row is 2 MiB).
+    # valid_len is the largest benchmark length, so all 64 tasks per row work.
+    num_rows, valid_len, block_size = 256, 1 << 20, 16
+    max_model_len = 1 << 20
 
     def prepare():
         dev = _device()
@@ -243,7 +244,7 @@ def _candidate_block_max_case() -> BenchCase:
         "block_max",
         prepare,
         exact=False,
-        notes=f"rows={num_rows} valid_len={valid_len} block={block_size}",
+        notes=f"rows={num_rows} valid_len={valid_len} max_model_len={max_model_len} block={block_size}",
     )
 
 
@@ -494,7 +495,7 @@ def _replace_embeds_case() -> BenchCase:
 
 
 def _rgb_case() -> BenchCase:
-    patch_size, num_imgs, n_vit = 14, 8, 54
+    patch_size, num_imgs, n_vit = 14, 50, 54
 
     def prepare():
         dev = _device()
@@ -548,8 +549,8 @@ def _rgb_case() -> BenchCase:
     )
 
 
-def _downsample_case(do_downsample: bool) -> BenchCase:
-    ratio, num_imgs, n_vit, dim = 3, 8, 54, 1024
+def _downsample_case(do_downsample: bool, num_imgs: int, n_vit: int) -> BenchCase:
+    ratio, dim = 3, 1024
 
     def prepare():
         dev = _device()
@@ -591,7 +592,7 @@ def _downsample_case(do_downsample: bool) -> BenchCase:
     tag = "pool" if do_downsample else "concat"
     return BenchCase(
         "image",
-        f"batch_downsample_{tag}",
+        f"batch_downsample_{tag}_i{num_imgs}_v{n_vit}",
         prepare,
         exact=False,
         notes=f"imgs={num_imgs} n_vit={n_vit} dim={dim} ratio={ratio} downsample={int(do_downsample)}",
@@ -791,15 +792,19 @@ CASES: list[BenchCase] = [
     _dflash_store_case(),
     _replace_embeds_case(),
     _rgb_case(),
-    _downsample_case(False),
-    _downsample_case(True),
-    _store_case("bf16", BF16_KV_FORMAT, 8192),
-    _store_case("v41_fp8", V41_FORMAT, 4096),
-    _store_case("v41_fp4", V41_FP4_FORMAT, 4096),
-    _load_case("bf16", BF16_KV_FORMAT, 8192),
-    _load_case("v41_fp8", V41_FORMAT, 4096),
-    _load_case("v41_fp4", V41_FP4_FORMAT, 4096),
-    _load_case("mxfp8_index", MXFP8_INDEX_KV_FORMAT, 1024),
+    _downsample_case(False, 8, 24),
+    _downsample_case(False, 32, 54),
+    _downsample_case(False, 8, 96),
+    _downsample_case(True, 8, 24),
+    _downsample_case(True, 32, 54),
+    _downsample_case(True, 8, 96),
+    _store_case("bf16", BF16_KV_FORMAT, 65536),
+    _store_case("v41_fp8", V41_FORMAT, 65536),
+    _store_case("v41_fp4", V41_FP4_FORMAT, 65536),
+    _load_case("bf16", BF16_KV_FORMAT, 65536),
+    _load_case("v41_fp8", V41_FORMAT, 65536),
+    _load_case("v41_fp4", V41_FP4_FORMAT, 65536),
+    _load_case("mxfp8_index", MXFP8_INDEX_KV_FORMAT, 65536),
 ]
 
 

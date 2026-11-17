@@ -1,1 +1,1 @@
-{"family": "gather_ids", "name": "n1024_nextn7", "device": 1, "notes": "old_ratio 0.9", "correct": true, "compared": "out_input_ids", "io_bytes": 107296, "asc_us": 4.2041, "pto_us": 4.1788, "ratio": 1.006054369675505, "asc_gbs": 25.521752574867392, "pto_gbs": 25.67627069972241}
+{"family": "gather_ids", "name": "n1024_nextn7", "device": 1, "notes": "old_ratio 0.9", "correct": true, "compared": "out_input_ids", "io_bytes": 107296, "asc_us": 4.1819500000000005, "pto_us": 4.1019, "ratio": 1.0195153465467224, "asc_gbs": 25.656930379368475, "pto_gbs": 26.157634267046983}

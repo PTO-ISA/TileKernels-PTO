@@ -4,8 +4,9 @@ prepare() puts contiguous tensors on the BENCH_DEVICES npu, compiles the ASC and
 PTO factories, clones every buffer, runs each kernel once, and returns relaunch
 closures. Import builds no tensors.
 
-No public kernel is omitted. The fused-transform KV-cache store arm is not
-launched: store_cache requires num_heads == 1, and these rows use num_heads=8.
+No public kernel is omitted. The fused-transform KV-cache store arm runs in the
+num_heads == 1 store_mxfp8 row; the num_heads=8 rows skip it because the kernel
+allows store_cache only when num_heads == 1.
 """
 
 from __future__ import annotations
@@ -402,10 +403,10 @@ def _fused_mods():
     return asc, pto
 
 
-def _prepare_fused(do_reject: bool):
+def _prepare_fused(vocab: int, do_reject: bool):
     def prepare():
         asc, pto = _fused_mods()
-        batch, vocab = 256, 1024
+        batch = 256
         assert vocab % 64 == 0
         gen = torch.Generator().manual_seed(31 + int(do_reject))
         logits = torch.randn(batch, vocab, generator=gen).contiguous()
@@ -574,6 +575,72 @@ def prepare_norm_fp8():
 
 _CACHE_NOTE = "KV-cache store skipped: store_cache requires num_heads==1 and a paged slot_mapping; num_heads=8"
 
+
+def prepare_rope_h64_d512():
+    # Captured 550B Q case: 64 heads by 512, RoPE only, rotary 64 at offset 448.
+    asc, pto = _transform_mods()
+    num_heads, head_dim, n, rotary_dim = 64, 512, 32768, 64
+    gen = torch.Generator().manual_seed(43)
+    x = torch.randn(n, num_heads, head_dim, generator=gen, dtype=torch.bfloat16)
+    weight = torch.randn(head_dim, generator=gen, dtype=torch.bfloat16)
+    positions = torch.randint(0, 4096, (n,), generator=gen, dtype=torch.int32)
+    cossin = torch.randn(4096, rotary_dim, generator=gen)
+    rows = n * num_heads
+    out_bf16 = torch.empty(n, num_heads, head_dim, dtype=torch.bfloat16)
+    out_quant = torch.empty(rows, head_dim, dtype=torch.float8_e4m3fn)
+    out_sf = torch.empty(rows, 1)
+    kv_cache = torch.empty(1, 1, head_dim, dtype=torch.uint8)
+    slot_mapping = torch.zeros(n, dtype=torch.int32)
+    flags = _transform_kwargs(
+        do_norm=False,
+        do_rope=True,
+        rotary_dim=rotary_dim,
+        rope_offset=head_dim - rotary_dim,
+        return_bf16=True,
+    )
+    kernel_asc = asc.fused_norm_rope_hadamard_cast_store_kvcache_tl(num_heads, head_dim, **flags)
+    kernel_pto = pto.fused_norm_rope_hadamard_cast_store_kvcache_tl(num_heads, head_dim, **flags)
+    args = [x, weight, positions, cossin, None, out_bf16, out_quant, out_sf, kv_cache, slot_mapping]
+    return _launch(kernel_asc, kernel_pto, args, [("bf16", 5)], [x, positions, cossin, out_bf16])
+
+
+def prepare_store_mxfp8_h1_d128():
+    # Index-K store: norm + e4m3 ue8m0 group 32 into an MXFP8 index cache.
+    asc, pto = _transform_mods()
+    from deepinfer_kernels.common import MXFP8_INDEX_KV_FORMAT as layout
+
+    num_heads, head_dim, n, block_size = 1, 128, 32768, 128
+    gen = torch.Generator().manual_seed(47)
+    x = torch.randn(n, head_dim, generator=gen, dtype=torch.bfloat16)
+    weight = torch.randn(head_dim, generator=gen, dtype=torch.bfloat16)
+    positions = torch.zeros(n, dtype=torch.int32)
+    cossin = torch.zeros(1, 1)
+    out_bf16 = torch.empty(n, head_dim, dtype=torch.bfloat16)
+    out_quant = torch.empty(n, head_dim, dtype=torch.float8_e4m3fn)
+    out_sf = torch.empty(n, layout.num_scales, dtype=torch.uint8)
+    num_blocks = (n + block_size - 1) // block_size
+    kv_cache = torch.zeros(num_blocks, block_size, layout.bytes_per_token, dtype=torch.uint8)
+    slot_mapping = torch.arange(n, dtype=torch.int32)
+    slot_mapping[0] = -1
+    flags = _transform_kwargs(
+        do_rope=False,
+        rotary_dim=0,
+        rope_offset=0,
+        cast_fmt="e4m3",
+        num_per_channels=32,
+        round_sf=True,
+        sf_format="ue8m0",
+        cache_layout=layout,
+        block_size=block_size,
+    )
+    kernel_asc = asc.fused_norm_rope_hadamard_cast_store_kvcache_tl(num_heads, head_dim, **flags)
+    kernel_pto = pto.fused_norm_rope_hadamard_cast_store_kvcache_tl(num_heads, head_dim, **flags)
+    args = [x, weight, positions, cossin, None, out_bf16, out_quant, out_sf, kv_cache, slot_mapping]
+    traffic = [x, weight, kv_cache]
+    asc_fn, pto_fn, compared, nbytes = _launch(kernel_asc, kernel_pto, args, [("kv_cache", 8)], traffic)
+    shown = [(label, a.float(), b.float()) for label, a, b in compared]
+    return asc_fn, pto_fn, shown, nbytes
+
 CASES: list[BenchCase] = [
     BenchCase("sampler", "prepare_verification_metadata", prepare_verification, notes="req 256, max_steps 7"),
     BenchCase("sampler", "expand_sampling_params", prepare_expand, notes="req 256, max_steps 7"),
@@ -619,7 +686,7 @@ CASES: list[BenchCase] = [
     BenchCase(
         "fused_sample",
         "b256_v1024",
-        _prepare_fused(False),
+        _prepare_fused(1024, False),
         exact=False,
         rtol=2e-2,
         atol=2e-2,
@@ -628,11 +695,29 @@ CASES: list[BenchCase] = [
     BenchCase(
         "fused_sample",
         "b256_v1024_reject",
-        _prepare_fused(True),
+        _prepare_fused(1024, True),
         exact=False,
         rtol=2e-2,
         atol=2e-2,
         notes="do_reject_sampling, same tensor list, shared seeds",
+    ),
+    BenchCase(
+        "fused_sample",
+        "b256_v129280",
+        _prepare_fused(129280, False),
+        exact=False,
+        rtol=2e-2,
+        atol=2e-2,
+        notes="do_sample, top_p 0.95, top_k 128, shared seeds, vocab chunked by 8192",
+    ),
+    BenchCase(
+        "fused_sample",
+        "b256_v129280_reject",
+        _prepare_fused(129280, True),
+        exact=False,
+        rtol=2e-2,
+        atol=2e-2,
+        notes="do_reject_sampling, same tensor list, shared seeds, vocab chunked by 8192",
     ),
     BenchCase(
         "fused_transform",
@@ -651,5 +736,23 @@ CASES: list[BenchCase] = [
         rtol=2e-1,
         atol=1e-1,
         notes=f"norm + e4m3 ue8m0 group 32; {_CACHE_NOTE}",
+    ),
+    BenchCase(
+        "fused_transform",
+        "rope_h64_d512_n32768",
+        prepare_rope_h64_d512,
+        exact=False,
+        rtol=2e-2,
+        atol=2e-2,
+        notes="captured 550B Q: rope only, rotary 64 offset 448, num_heads=64",
+    ),
+    BenchCase(
+        "fused_transform",
+        "store_mxfp8_h1_d128_n32768",
+        prepare_store_mxfp8_h1_d128,
+        exact=False,
+        rtol=2e-1,
+        atol=1.0,
+        notes="norm + e4m3 ue8m0 group 32 into MXFP8 index cache, num_heads=1 block 128, contiguous slots, slot 0 invalid",
     ),
 ]
