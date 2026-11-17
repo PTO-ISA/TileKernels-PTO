@@ -18,6 +18,7 @@ _version.py
 
 # workspace
 workspace
+/.tilelang_cache*/
 
 # Agent prompt
 AGENTS.md
