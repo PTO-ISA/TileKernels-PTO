@@ -147,7 +147,7 @@ def mhc_post_bwd_vmi(d_o, comb_res_mix, residual, post_layer_mix, x, h_blk, num_
                 for idx in T.unroll(mhc * mhc // 2, explicit=True):
                     V.vstore(zero, comb_mix_acc[idx * 2, 0])
 
-            for pid_h in T.serial(num_hidden_tiles):
+            for pid_h in T.unroll(num_hidden_tiles, unroll_factor=num_hidden_tiles):
                 T.copy(d_o[pid_n, 0, pid_h * h_blk], d_o_ub)
                 T.copy(x[pid_n, pid_h * h_blk], x_ub)
                 T.copy(residual[pid_n, 0, pid_h * h_blk], residual_ub)
