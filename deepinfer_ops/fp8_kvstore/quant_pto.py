@@ -7,7 +7,7 @@ from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
 
 from .common import FLOAT8E4M3_MAX, FP8_AMAX_MARGIN
-from .store_common import SF_COL, make_store_tl
+from .store_common import OUT_ROW_BYTES, SF_COL, TOKENS_PER_TILE, make_store_tl
 
 
 def _make_scale(lanes: int):
@@ -88,19 +88,45 @@ def quantize_tile_compact(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: 
 
 
 @T.macro
-def quantize_tile_direct(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: Any):
+def quantize_tile_direct_impl(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: Any, grouped_mask: bool, packed_scale: bool):
+    if packed_scale:
+        sf_words = T.view(scales, (TOKENS_PER_TILE, OUT_ROW_BYTES // 4), T.uint32)
     with T.SimdVF():
         for h in T.serial(active):
             for p in T.unroll(4, explicit=True):
                 values = V.vcvt(V.vload(x[h, p * 128], size=128), "float32")
                 mask = V.create_mask(128, size=128)
                 amax = V.vcmax(V.vabs(values, mask), mask, group=4)
-                mask4 = V.create_mask(4, size=4)
+                if grouped_mask:
+                    mask4 = V.create_mask(1, size=4, group=4)
+                else:
+                    mask4 = V.create_mask(4, size=4)
                 encoded, inverse = compute_scale4(amax, mask4, V.vbrc(T.uint32(1), size=4), V.vbrc(T.uint32(254), size=4))
                 broadcast = V.vbrc(inverse, size=128, group=4)
                 packed = V.vcvt(V.vmul(values, broadcast, mask), "float8_e4m3fn", rounding="R", saturate="SAT")
                 V.vstore(packed, out[h, p * 128])
-                store_scale_bytes(encoded, scales, h, SF_COL + p * 4, 4)
+                if packed_scale:
+                    _, high16 = V.vunzip(V.vinterpret_cast(encoded, "uint32"), to_dtype="uint16")
+                    exponent16 = V.vshrs(high16, 7, mask4)
+                    exponent8 = V.vcvt(exponent16, "uint8", saturate="NOSAT")
+                    V.vstore(V.vinterpret_cast(exponent8, "uint32"), sf_words[h, (SF_COL + p * 4) // 4])
+                else:
+                    store_scale_bytes(encoded, scales, h, SF_COL + p * 4, 4)
+
+
+@T.macro
+def quantize_tile_direct(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: Any):
+    quantize_tile_direct_impl(x, out, scales, active, False, False)
+
+
+@T.macro
+def quantize_tile_direct_grouped(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: Any):
+    quantize_tile_direct_impl(x, out, scales, active, True, False)
+
+
+@T.macro
+def quantize_tile_direct_packed(x: T.Buffer, out: T.Buffer, scales: T.Buffer, active: Any):
+    quantize_tile_direct_impl(x, out, scales, active, True, True)
 
 
 @T.macro
@@ -141,6 +167,8 @@ VARIANTS = {
     "native_half": quantize_tile_native,
     "compact_ub": quantize_tile_compact,
     "direct_brc": quantize_tile_direct,
+    "direct_brc_grouped": quantize_tile_direct_grouped,
+    "direct_brc_packed": quantize_tile_direct_packed,
     "native_half_hoisted": quantize_tile_hoisted,
     "scale_only": quantize_tile_scale_only,
     "pack_only": quantize_tile_pack_only,

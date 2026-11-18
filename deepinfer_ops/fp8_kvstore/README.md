@@ -42,6 +42,8 @@ The input is 65,536 contiguous BF16 tokens of dimension 512. Slot mapping is `0.
 | `native_half_hoisted` | yes | 61.44 | 99.43 | 0.618 | 11,140,988 |
 | `compact_ub` | yes | 61.57 | 170.09 | 0.362 | 19,912,083 |
 | `direct_brc` | compiler rejection | — | — | — | — |
+| `direct_brc_grouped` | compiler rejection | — | — | — | — |
+| `direct_brc_packed` | compiler rejection | — | — | — | — |
 | `scale_only` ablation | no | 61.43 | 77.03 | 0.797 | 8,907,408 |
 | `pack_only` ablation | no | 61.49 | 52.01 | 1.182 | 5,902,842 |
 
@@ -60,6 +62,10 @@ VMI-UNSUPPORTED: pto.vmi.group_broadcast ... requires full result physical chunk
 ```
 
 `compact_ub` replaces that broadcast with a four-float UB store, an explicit `VST_VLD` barrier, and a grouped load/broadcast. It is a correctness-valid control, not an optimization: the round-trip costs more than the arithmetic it saves. The requested PTOAS fix is to support this computed compact-vector grouped broadcast directly in registers, or select an equivalent `vselr`/shuffle lowering without UB traffic or an inserted barrier. The committed `direct_brc.pto` is the exact failing compiler input. This recommendation follows from the compiler rejection and the slower UB control; it does not assume a particular physical instruction sequence.
+
+Related quant kernels provide two relevant patterns. [`per_block_cast_vmi.py`](https://github.com/PTO-ISA/TileKernels-PTO/blob/6e20f6b/tile_kernels/quant/per_block_cast_vmi.py#L110-L145) uses `create_mask(1, size=4, group=4)`, computed four-lane scales, direct grouped broadcast, and a `vunzip`-based UE8M0 packing path. `direct_brc_grouped` applies the grouped mask alone; `direct_brc_packed` additionally applies the packed scale store. Both controls still fail at the same computed `4xf32` to `128xf32` broadcast with the same padding-lane diagnostic. These results rule out either change as a sufficient frontend workaround; they do not show that the per-block kernel itself is broken.
+
+[`per_token_cast_vmi.py`](https://github.com/PTO-ISA/TileKernels-PTO/blob/6e20f6b/tile_kernels/quant/per_token_cast_vmi.py#L223-L246) instead reduces all groups, computes scales together, and then reloads grouped inverse scales. A batched two-phase `store_kv` variant could use this structure to replace four independent compact-UB round trips with one scale phase and two phase boundaries. This is a candidate for future measurement, not a claimed performance improvement.
 
 The emitted VPTO supports this attribution. Native-half contains eight each of `vmaxs`, `vmuls`, `vadds`, `vshrs`, and `vshls`, plus 16 scale-path `vsub` operations, in the unrolled token body. Compact-UB halves each of those counts to four and eight, but adds four `VST_VLD` barriers and layout/materialization operations including eight `vpack` and 12 `vor`; it takes 19.91M AIV cycles. Native-half and native-half-hoisted have no `pto.mem_bar` lines in their VPTO, so the 0.620× native result is not an implicit vecscope-barrier regression. `--enable-vecscope-mem-bar=false` was active for every compile and run.
 

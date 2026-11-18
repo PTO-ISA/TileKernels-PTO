@@ -36,12 +36,13 @@ def op_counts(text: str, prefix: str) -> dict[str, int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--variant", choices=["asc", "native_half", "compact_ub", "direct_brc", "native_half_hoisted", "all"], default="all")
+    pto_variants = ["native_half", "compact_ub", "direct_brc", "direct_brc_grouped", "direct_brc_packed", "native_half_hoisted"]
+    parser.add_argument("--variant", choices=["asc", *pto_variants, "all"], default="all")
     parser.add_argument("--out", type=Path, default=Path(__file__).resolve().parent / "results" / "lowering")
     args = parser.parse_args()
     torch.npu.set_device(int(os.environ.get("BENCH_DEVICES", "1")))
     args.out.mkdir(parents=True, exist_ok=True)
-    variants = ["asc", "native_half", "compact_ub", "direct_brc", "native_half_hoisted"] if args.variant == "all" else [args.variant]
+    variants = ["asc", *pto_variants] if args.variant == "all" else [args.variant]
     summary_path = args.out / "summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
     for variant in variants:

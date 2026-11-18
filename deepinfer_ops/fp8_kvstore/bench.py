@@ -34,8 +34,17 @@ from deepinfer_ops.fp8_kvstore.store_common import BLOCK_SIZE, PAYLOAD_BYTES  # 
 
 RESULTS = Path(__file__).resolve().parent / "results" / "bench.jsonl"
 TOKENS = 65536
-PRODUCTION_VARIANTS = {"native_half", "compact_ub", "direct_brc", "native_half_hoisted"}
-ALL_VARIANTS = ["native_half", "compact_ub", "direct_brc", "native_half_hoisted", "scale_only", "pack_only"]
+PRODUCTION_VARIANTS = {"native_half", "compact_ub", "direct_brc", "direct_brc_grouped", "direct_brc_packed", "native_half_hoisted"}
+ALL_VARIANTS = [
+    "native_half",
+    "compact_ub",
+    "direct_brc",
+    "direct_brc_grouped",
+    "direct_brc_packed",
+    "native_half_hoisted",
+    "scale_only",
+    "pack_only",
+]
 
 
 def _toolchain():
