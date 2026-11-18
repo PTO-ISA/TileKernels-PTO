@@ -1,6 +1,6 @@
 # Sequential FP8 `store_kv`: matched ASC/PTO reproducer
 
-This standalone experiment isolates the slow VF-only PTO quantization path in sequential FP8 `store_kv`. Both implementations use the same slot classification, 16-token tiles, three-stage pipeline, contiguous 528-byte writes, and `T.copy` DMA in `store_common.py`; only the vector quantization differs. It is based on TileKernels-PTO [`vmi-impl` at `6e20f6b`](https://github.com/PTO-ISA/TileKernels-PTO/commit/6e20f6b). The ASC vector path is ported from DeepInfer [`store_kv.py` at `a679bb86`](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc/store_kv.py).
+This standalone experiment isolates the slow VF-only PTO quantization path in sequential FP8 `store_kv`. Both implementations use the same slot classification, 16-token tiles, three-stage pipeline, contiguous 528-byte writes, and `T.copy` DMA in `store_common.py`; only the vector quantization differs. It is based on TileKernels-PTO [`vmi-impl` at `6e20f6b`](https://github.com/PTO-ISA/TileKernels-PTO/commit/6e20f6b). The ASC vector path is ported from DeepInfer [`store_kv_cache.py` at `a679bb86`](https://github.com/deepseek-ai/DeepInfer/blob/a679bb86ce36e883a98a97733492b686e5b9a08e/deepinfer/model_executor/layers/tilelang_ops/asc/store_kv_cache.py).
 
 ## Reproduce
 
@@ -53,9 +53,95 @@ Hoisting masks and broadcast constants out of the loop has no measurable benefit
 
 ## Compiler target
 
-`native_half` first reduces each pair of FP32 lanes, broadcasts the pair result to 64 lanes, and then runs clamp, multiply, exponent extraction, and inverse construction on all 64 lanes. This happens eight times per token. ASC instead converts even and odd BF16 values into two FP32 vectors and derives four scales in one 64-lane scale sequence, four times per token. The extra scale sequence is the main controlled difference; the surrounding kernel is shared.
+### Native PTO: eight 64-lane scale sequences per token
 
-`direct_brc` expresses the intended compact alternative: reduce 128 values to four maxima, run scale arithmetic on four lanes, and broadcast each inverse to 32 lanes. PTOAS 0.76 rejects the register-only `V.vbrc(inverse, size=128, group=4)`:
+The following is shortened from `quant_pto.py`; the loop bounds, vector widths, and operations are unchanged:
+
+```python
+for p in T.unroll(4, explicit=True):
+    for half in T.unroll(2, explicit=True):
+        offset = p * 128 + half * 64
+        values = V.vcvt(V.vload(x[h, offset], size=64), "float32")
+        mask = V.create_mask(64, size=64)
+
+        # 64 FP32 values -> two maxima, one for each 32-value group.
+        amax = V.vcmax(V.vabs(values, mask), mask, group=2)
+
+        # Repeat each maximum over its 32 lanes before computing scales.
+        amax = V.vbrc(amax, size=64, group=2)
+        encoded_dense, inverse = compute_scale64(
+            amax,
+            V.create_mask(64, size=64),
+            V.vbrc(T.uint32(1), size=64),
+            V.vbrc(T.uint32(254), size=64),
+        )
+        packed = V.vcvt(
+            V.vmul(values, inverse, mask),
+            "float8_e4m3fn", rounding="R", saturate="SAT",
+        )
+```
+
+Each `half` iteration handles 64 values and two scales. The nested `4 × 2` loops therefore invoke `compute_scale64` eight times per token. Despite only two distinct maxima entering the helper, every instruction below operates on 64 lanes:
+
+```python
+clamped = V.vmaxs(amax, T.float32(FP8_AMAX_MARGIN), mask)
+bits = V.vinterpret_cast(
+    V.vmuls(clamped, T.float32(1.0 / FLOAT8E4M3_MAX), mask), "uint32"
+)
+exponent = V.vadds(
+    V.vshrs(V.vsub(bits, one, mask), 23, mask), T.uint32(1), mask
+)
+inverse = V.vinterpret_cast(
+    V.vshls(V.vsub(bias, exponent, mask), 23, mask), "float32"
+)
+```
+
+### ASC: four 64-lane scale sequences per token
+
+The corresponding ASC excerpt from `quant_asc.py` is:
+
+```python
+for p in T.unroll(4, explicit=True):
+    raw = S.vld(x[h, p * 128])  # 128 BF16 values = four 32-value groups
+    even = S.vcvt(raw, T.float32, part=0)
+    odd = S.vcvt(raw, T.float32, part=1)
+
+    maxima16 = S.vcgmax(S.vmax(S.vabs(even), S.vabs(odd)))
+    even_maxima, odd_maxima = S.vdintlv(maxima16, maxima16)
+    amax = S.vmax(even_maxima, odd_maxima)  # four distinct group maxima
+
+    encoded, inverse = compute_scale(amax)  # one 64-lane scale sequence
+    inverse = S.vselr(inverse, S.vshrs(lane, 4))
+
+    q0 = S.vcvt(S.vmul(even, inverse), T.float8_e4m3fn, part=0)
+    q1 = S.vcvt(S.vmul(odd, inverse), T.float8_e4m3fn, part=1)
+    packed = S.vor(
+        T.reinterpret(q0, "uint32x64"), T.reinterpret(q1, "uint32x64")
+    )
+```
+
+ASC's `compute_scale` uses the same clamp and exponent formula as the PTO helper, with physical-SIMD operations such as `S.vmaxs`, `S.vmuls`, and `S.vshls`. The difference is the data organization around that helper: even/odd conversion plus `vcgmax`/`vdintlv` lets one 64-lane call produce four scales. There are four `p` iterations, hence four scale sequences per token rather than eight. `vselr` then selects the appropriate inverse for each lane without first computing two separate dense 64-lane half-vectors. This doubled scale-sequence count is the main controlled difference; the surrounding DMA and pipeline code is shared.
+
+### Intended compact PTO form
+
+`direct_brc` removes the redundant dense scale work by keeping the scale computation at four lanes:
+
+```python
+values = V.vcvt(V.vload(x[h, p * 128], size=128), "float32")
+mask = V.create_mask(128, size=128)
+amax = V.vcmax(V.vabs(values, mask), mask, group=4)  # 128 -> 4 maxima
+mask4 = V.create_mask(4, size=4)
+encoded, inverse = compute_scale4(
+    amax, mask4, V.vbrc(T.uint32(1), size=4), V.vbrc(T.uint32(254), size=4)
+)
+broadcast = V.vbrc(inverse, size=128, group=4)       # 4 -> 128 lanes
+packed = V.vcvt(
+    V.vmul(values, broadcast, mask),
+    "float8_e4m3fn", rounding="R", saturate="SAT",
+)
+```
+
+PTOAS 0.76 rejects the register-only `V.vbrc(inverse, size=128, group=4)`:
 
 ```text
 VMI-UNSUPPORTED: pto.vmi.group_broadcast ... requires full result physical chunks; found padding lane in physical chunk
