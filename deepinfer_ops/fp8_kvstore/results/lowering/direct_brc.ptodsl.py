@@ -1,0 +1,184 @@
+import tilelang.contrib.ptodsl as tl
+from ptodsl import pto
+
+@pto.jit(name="_store_kv_cache_kernel", kernel_kind="vector", target="a5", mode="explicit")
+def _store_kv_cache_kernel(kv: pto.ptr(pto.bf16, "gm"), kv_cache: pto.ptr(pto.ui8, "gm"), slot_mapping: pto.ptr(pto.si32, "gm"), cache_block_stride: pto.si64, cache_token_stride: pto.si64, n: pto.si32, num_blocks: pto.si32):
+  pto.init_core()
+  bx = pto.cast(pto.get_block_idx(), pto.si32)
+  buf_dyn_shmem = pto.castptr(pto.const(0, dtype=pto.i64), pto.ptr(pto.ui8, "ub"))
+  flags = pto.const(0, dtype=pto.si32)
+  slots_ub_version_counter_1 = pto.const(0, dtype=pto.si32)
+  x_ub_version_counter_2 = pto.const(0, dtype=pto.si32)
+  pto.set_flag("MTE3", "V", event_id=0)
+  pto.set_flag("MTE3", "V", event_id=1)
+  pto.set_flag("MTE3", "V", event_id=2)
+  pto.set_flag("S", "MTE2", event_id=0)
+  pto.set_flag("S", "MTE2", event_id=1)
+  pto.set_flag("S", "MTE2", event_id=2)
+  pto.set_flag("V", "MTE2", event_id=0)
+  pto.set_flag("V", "MTE2", event_id=1)
+  pto.set_flag("V", "MTE2", event_id=2)
+  slots_ub_version_counter_1 = pto.const(0, dtype=pto.si32)
+  x_ub_version_counter_2 = pto.const(0, dtype=pto.si32)
+  for _tl_range_w in range(0, pto.div((n + 1151), 1152), 1):
+    w = pto.cast(_tl_range_w, pto.si32)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      pto.wait_flag("S", "MTE2", event_id=(3 & ((slots_ub_version_counter_1 % 3) >> 31)) + (slots_ub_version_counter_1 % 3))
+      pto.mte_gm_ub(pto.castptr(pto.addptr(slot_mapping, (pto.cast(w, pto.si64) * 1152) + (pto.cast(bx, pto.si64) * 16)), pto.ptr(pto.ui8, "gm")), pto.castptr(pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.si32, "ub")), (((3 & ((slots_ub_version_counter_1 % 3) >> 31)) * 16) + ((slots_ub_version_counter_1 % 3) * 16)) + 18816), pto.ptr(pto.ui8, "ub")), 0, pto.min(16, ((n - (bx * 16)) - (w * 1152))) * 4, nburst=(1, pto.min(16, ((n - (bx * 16)) - (w * 1152))) * 4, pto.min(16, ((n - (bx * 16)) - (w * 1152))) * 4))
+      pto.set_flag("MTE2", "S", event_id=(3 & ((slots_ub_version_counter_1 % 3) >> 31)) + (slots_ub_version_counter_1 % 3))
+      pto.wait_flag("MTE2", "S", event_id=(3 & ((slots_ub_version_counter_1 % 3) >> 31)) + (slots_ub_version_counter_1 % 3))
+    first = pto.const(0, dtype=pto.si32)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      first = pto.cast(pto.load(pto.castptr(buf_dyn_shmem, pto.ptr(pto.si32, "ub")), (((3 & ((slots_ub_version_counter_1 % 3) >> 31)) * 16) + ((slots_ub_version_counter_1 % 3) * 16)) + 18816), pto.si32)
+      flags = pto.const(2, dtype=pto.si32)
+    tl_cond_0 = pto.const(0, dtype=pto.si8)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      tl_cond_0 = pto.cast(pto.select(tl.as_logical_bool(first == -1), pto.const(1, dtype=pto.si8), pto.const(0, dtype=pto.si8)), pto.si8)
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_0)):
+        flags = pto.const(0, dtype=pto.si32)
+      for _tl_range_h in range(0, pto.min(16, ((n - (bx * 16)) - (w * 1152))), 1):
+        h = pto.cast(_tl_range_h, pto.si32)
+        slot = pto.load(pto.castptr(buf_dyn_shmem, pto.ptr(pto.si32, "ub")), ((((3 & ((slots_ub_version_counter_1 % 3) >> 31)) * 16) + ((slots_ub_version_counter_1 % 3) * 16)) + h) + 18816)
+        tl_cond_2 = slot != (first + h)
+        if tl.as_logical_bool(slot != -1):
+          flags = pto.cast(flags | 1, pto.si32)
+        if tl.as_logical_bool(tl_cond_2):
+          flags = pto.cast(flags & 1, pto.si32)
+    metadata_flags = pto.const(0, dtype=pto.si32)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      metadata_flags = pto.cast(flags, pto.si32)
+    tl_cond_6 = pto.const(0, dtype=pto.si8)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      tl_cond_6 = pto.cast(pto.select(tl.as_logical_bool(0 < (metadata_flags & 1)), pto.const(1, dtype=pto.si8), pto.const(0, dtype=pto.si8)), pto.si8)
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.wait_flag("V", "MTE2", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        pto.mte_gm_ub(pto.castptr(pto.addptr(kv, (pto.cast(w, pto.si64) * 589824) + (pto.cast(bx, pto.si64) * 8192)), pto.ptr(pto.ui8, "gm")), pto.castptr(pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.bf16, "ub")), ((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8192) + ((x_ub_version_counter_2 % 3) * 8192)), pto.ptr(pto.ui8, "ub")), 4, pto.min(16, ((n - (bx * 16)) - (w * 1152))) * 1024, nburst=(1, pto.min(16, ((n - (bx * 16)) - (w * 1152))) * 1024, pto.min(16, ((n - (bx * 16)) - (w * 1152))) * 1024))
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.set_flag("MTE2", "V", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    tl_cond_5 = pto.const(0, dtype=pto.si8)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        tl_cond_5 = pto.cast(pto.select(tl.as_logical_bool(0 < (metadata_flags & 2)), pto.const(1, dtype=pto.si8), pto.const(0, dtype=pto.si8)), pto.si8)
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.wait_flag("MTE3", "V", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.wait_flag("MTE2", "V", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        with pto.vecscope():
+          for _tl_range_row in range(0, pto.min(16, ((n - (bx * 16)) - (w * 1152))), 1):
+            row = pto.cast(_tl_range_row, pto.si32)
+            values = pto.vmi.vcvt(pto.vmi.vload(pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.bf16, "ub")), (((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8192) + ((x_ub_version_counter_2 % 3) * 8192)) + (row * 512)), 0, size=128), to_dtype=pto.f32)
+            mask = pto.vmi.create_mask(128, size=128)
+            amax = pto.vmi.vcmax(pto.vmi.vabs(values, mask), mask, group=4)
+            mask_1 = pto.vmi.create_mask(4, size=4)
+            one = pto.vmi.vbrc(pto.ui32(1), size=4)
+            bias = pto.vmi.vbrc(pto.ui32(254), size=4)
+            clamped = pto.vmi.vmaxs(amax, float.fromhex('0x1.a36e2eb1c432dp-14'), mask_1)
+            bits = pto.vmi.vinterpret_cast(pto.vmi.vmuls(clamped, float.fromhex('0x1.2492492492492p-9'), mask_1), to_dtype=pto.ui32)
+            scale = pto.vmi.vadds(pto.vmi.vshrs(pto.vmi.vsub(bits, one, mask_1), 23, mask_1), 1, mask_1)
+            inverse = pto.vmi.vinterpret_cast(pto.vmi.vshls(pto.vmi.vsub(bias, scale, mask_1), 23, mask_1), to_dtype=pto.f32)
+            broadcast = pto.vmi.vbrc(inverse, group=4, size=128)
+            packed = pto.vmi.vcvt(pto.vmi.vmul(values, broadcast, mask), rounding="R", saturate="SAT", to_dtype=pto.f8e4m3)
+            pto.vmi.vstore(packed, pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.f8e4m3, "ub")), ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49152), 0)
+            mask_2 = pto.vmi.create_mask(4, size=4)
+            pto.vmi.vstore(pto.vmi.vcvt(scale, to_dtype=pto.ui8), pto.addptr(buf_dyn_shmem, ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49664), 0, mask_2)
+            values_1 = pto.vmi.vcvt(pto.vmi.vload(pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.bf16, "ub")), ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8192) + ((x_ub_version_counter_2 % 3) * 8192)) + (row * 512)) + 128), 0, size=128), to_dtype=pto.f32)
+            mask_3 = pto.vmi.create_mask(128, size=128)
+            amax_1 = pto.vmi.vcmax(pto.vmi.vabs(values_1, mask_3), mask_3, group=4)
+            mask_4 = pto.vmi.create_mask(4, size=4)
+            one_1 = pto.vmi.vbrc(pto.ui32(1), size=4)
+            bias_1 = pto.vmi.vbrc(pto.ui32(254), size=4)
+            clamped_1 = pto.vmi.vmaxs(amax_1, float.fromhex('0x1.a36e2eb1c432dp-14'), mask_4)
+            bits_1 = pto.vmi.vinterpret_cast(pto.vmi.vmuls(clamped_1, float.fromhex('0x1.2492492492492p-9'), mask_4), to_dtype=pto.ui32)
+            scale_1 = pto.vmi.vadds(pto.vmi.vshrs(pto.vmi.vsub(bits_1, one_1, mask_4), 23, mask_4), 1, mask_4)
+            inverse_1 = pto.vmi.vinterpret_cast(pto.vmi.vshls(pto.vmi.vsub(bias_1, scale_1, mask_4), 23, mask_4), to_dtype=pto.f32)
+            broadcast_1 = pto.vmi.vbrc(inverse_1, group=4, size=128)
+            packed_1 = pto.vmi.vcvt(pto.vmi.vmul(values_1, broadcast_1, mask_3), rounding="R", saturate="SAT", to_dtype=pto.f8e4m3)
+            pto.vmi.vstore(packed_1, pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.f8e4m3, "ub")), ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49280), 0)
+            mask_5 = pto.vmi.create_mask(4, size=4)
+            pto.vmi.vstore(pto.vmi.vcvt(scale_1, to_dtype=pto.ui8), pto.addptr(buf_dyn_shmem, ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49668), 0, mask_5)
+            values_2 = pto.vmi.vcvt(pto.vmi.vload(pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.bf16, "ub")), ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8192) + ((x_ub_version_counter_2 % 3) * 8192)) + (row * 512)) + 256), 0, size=128), to_dtype=pto.f32)
+            mask_6 = pto.vmi.create_mask(128, size=128)
+            amax_2 = pto.vmi.vcmax(pto.vmi.vabs(values_2, mask_6), mask_6, group=4)
+            mask_7 = pto.vmi.create_mask(4, size=4)
+            one_2 = pto.vmi.vbrc(pto.ui32(1), size=4)
+            bias_2 = pto.vmi.vbrc(pto.ui32(254), size=4)
+            clamped_2 = pto.vmi.vmaxs(amax_2, float.fromhex('0x1.a36e2eb1c432dp-14'), mask_7)
+            bits_2 = pto.vmi.vinterpret_cast(pto.vmi.vmuls(clamped_2, float.fromhex('0x1.2492492492492p-9'), mask_7), to_dtype=pto.ui32)
+            scale_2 = pto.vmi.vadds(pto.vmi.vshrs(pto.vmi.vsub(bits_2, one_2, mask_7), 23, mask_7), 1, mask_7)
+            inverse_2 = pto.vmi.vinterpret_cast(pto.vmi.vshls(pto.vmi.vsub(bias_2, scale_2, mask_7), 23, mask_7), to_dtype=pto.f32)
+            broadcast_2 = pto.vmi.vbrc(inverse_2, group=4, size=128)
+            packed_2 = pto.vmi.vcvt(pto.vmi.vmul(values_2, broadcast_2, mask_6), rounding="R", saturate="SAT", to_dtype=pto.f8e4m3)
+            pto.vmi.vstore(packed_2, pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.f8e4m3, "ub")), ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49408), 0)
+            mask_8 = pto.vmi.create_mask(4, size=4)
+            pto.vmi.vstore(pto.vmi.vcvt(scale_2, to_dtype=pto.ui8), pto.addptr(buf_dyn_shmem, ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49672), 0, mask_8)
+            values_3 = pto.vmi.vcvt(pto.vmi.vload(pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.bf16, "ub")), ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8192) + ((x_ub_version_counter_2 % 3) * 8192)) + (row * 512)) + 384), 0, size=128), to_dtype=pto.f32)
+            mask_9 = pto.vmi.create_mask(128, size=128)
+            amax_3 = pto.vmi.vcmax(pto.vmi.vabs(values_3, mask_9), mask_9, group=4)
+            mask_10 = pto.vmi.create_mask(4, size=4)
+            one_3 = pto.vmi.vbrc(pto.ui32(1), size=4)
+            bias_3 = pto.vmi.vbrc(pto.ui32(254), size=4)
+            clamped_3 = pto.vmi.vmaxs(amax_3, float.fromhex('0x1.a36e2eb1c432dp-14'), mask_10)
+            bits_3 = pto.vmi.vinterpret_cast(pto.vmi.vmuls(clamped_3, float.fromhex('0x1.2492492492492p-9'), mask_10), to_dtype=pto.ui32)
+            scale_3 = pto.vmi.vadds(pto.vmi.vshrs(pto.vmi.vsub(bits_3, one_3, mask_10), 23, mask_10), 1, mask_10)
+            inverse_3 = pto.vmi.vinterpret_cast(pto.vmi.vshls(pto.vmi.vsub(bias_3, scale_3, mask_10), 23, mask_10), to_dtype=pto.f32)
+            broadcast_3 = pto.vmi.vbrc(inverse_3, group=4, size=128)
+            packed_3 = pto.vmi.vcvt(pto.vmi.vmul(values_3, broadcast_3, mask_9), rounding="R", saturate="SAT", to_dtype=pto.f8e4m3)
+            pto.vmi.vstore(packed_3, pto.addptr(pto.castptr(buf_dyn_shmem, pto.ptr(pto.f8e4m3, "ub")), ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49536), 0)
+            mask_11 = pto.vmi.create_mask(4, size=4)
+            pto.vmi.vstore(pto.vmi.vcvt(scale_3, to_dtype=pto.ui8), pto.addptr(buf_dyn_shmem, ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (row * 544)) + 49676), 0, mask_11)
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.set_flag("V", "MTE3", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.set_flag("V", "MTE2", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    first_1 = pto.const(0, dtype=pto.si32)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        if tl.as_logical_bool(tl.as_logical_bool(tl_cond_5)):
+          first_1 = pto.cast(pto.load(pto.castptr(buf_dyn_shmem, pto.ptr(pto.si32, "ub")), (((3 & ((slots_ub_version_counter_1 % 3) >> 31)) * 16) + ((slots_ub_version_counter_1 % 3) * 16)) + 18816), pto.si32)
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.pipe_barrier("MTE3")
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.wait_flag("V", "MTE3", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        if tl.as_logical_bool(tl.as_logical_bool(tl_cond_5)):
+          if tl.as_logical_bool(0 < (num_blocks - (first_1 >> 6))):
+            pto.mte_ub_gm(pto.addptr(buf_dyn_shmem, (((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + 49152), pto.addptr(kv_cache, ((pto.cast(first_1, pto.si64) >> 6) * cache_block_stride) + ((pto.cast(first_1, pto.si64) & 63) * cache_token_stride)), 528, nburst=(pto.min(pto.min(16, ((n - (bx * 16)) - (w * 1152))), (64 - (first_1 & 63))), 544, cache_token_stride), l2_cache="naci")
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        if tl.as_logical_bool(tl.logical_not(tl.as_logical_bool(tl_cond_5))):
+          for _tl_range_h_1 in range(0, pto.min(16, ((n - (bx * 16)) - (w * 1152))), 1):
+            h_1 = pto.cast(_tl_range_h_1, pto.si32)
+            slot_1 = pto.load(pto.castptr(buf_dyn_shmem, pto.ptr(pto.si32, "ub")), ((((3 & ((slots_ub_version_counter_1 % 3) >> 31)) * 16) + ((slots_ub_version_counter_1 % 3) * 16)) + h_1) + 18816)
+            if tl.as_logical_bool(slot_1 != -1):
+              pto.pipe_barrier("MTE3")
+              if tl.as_logical_bool(0 < (num_blocks - (slot_1 >> 6))):
+                pto.mte_ub_gm(pto.addptr(buf_dyn_shmem, ((((3 & ((x_ub_version_counter_2 % 3) >> 31)) * 8704) + ((x_ub_version_counter_2 % 3) * 8704)) + (h_1 * 544)) + 49152), pto.addptr(kv_cache, ((pto.cast(slot_1, pto.si64) >> 6) * cache_block_stride) + ((pto.cast(slot_1, pto.si64) & 63) * cache_token_stride)), 528, nburst=(1, 528, 528), l2_cache="naci")
+      pto.set_flag("S", "MTE2", event_id=(3 & ((slots_ub_version_counter_1 % 3) >> 31)) + (slots_ub_version_counter_1 % 3))
+      slots_ub_version_counter_1 = pto.cast(slots_ub_version_counter_1 + 1, pto.si32)
+    tl_cond_3 = pto.const(0, dtype=pto.si8)
+    if tl.as_logical_bool(((w * 72) + bx) < ((n + 15) >> 4)):
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        if tl.as_logical_bool(tl.as_logical_bool(tl_cond_5)):
+          tl_cond_3 = pto.cast(pto.select(tl.as_logical_bool((48 < (first_1 & 63)) and (64 < (((n + (first_1 & 63)) - (bx * 16)) - (w * 1152)))), pto.const(1, dtype=pto.si8), pto.const(0, dtype=pto.si8)), pto.si8)
+      if tl.as_logical_bool(tl.as_logical_bool(tl_cond_6)):
+        if tl.as_logical_bool(tl.as_logical_bool(tl_cond_5)):
+          if tl.as_logical_bool(tl.as_logical_bool(tl_cond_3)):
+            if tl.as_logical_bool(((64 < (pto.min(16, ((n - (bx * 16)) - (w * 1152))) + (first_1 & 63))) and (((((n >> 4) - bx) - (w * 72)) < 1) or (48 < (first_1 & 63)))) and (1 < (num_blocks - (first_1 >> 6)))):
+              pto.mte_ub_gm(pto.addptr(buf_dyn_shmem, ((((3 & ((pto.cast(x_ub_version_counter_2, pto.si64) % 3) >> 63)) * 8704) + ((pto.cast(x_ub_version_counter_2, pto.si64) % 3) * 8704)) + (pto.min(pto.min(16, ((pto.cast(n, pto.si64) - (pto.cast(bx, pto.si64) * 16)) - (pto.cast(w, pto.si64) * 1152))), (64 - (pto.cast(first_1, pto.si64) & 63))) * 544)) + 49152), pto.addptr(kv_cache, ((pto.cast(first_1, pto.si64) >> 6) + 1) * cache_block_stride), 528, nburst=(pto.min(pto.max(0, ((pto.min(16, ((n - (bx * 16)) - (w * 1152))) + (first_1 & 63)) - 64)), (16 - pto.min(pto.min(16, ((n - (bx * 16)) - (w * 1152))), (64 - (first_1 & 63))))), 544, cache_token_stride), l2_cache="naci")
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      pto.set_flag("MTE3", "V", event_id=(3 & ((x_ub_version_counter_2 % 3) >> 31)) + (x_ub_version_counter_2 % 3))
+    if tl.as_logical_bool((((w * 72) + bx) < ((n + 15) >> 4)) and tl.as_logical_bool(tl_cond_6)):
+      x_ub_version_counter_2 = pto.cast(x_ub_version_counter_2 + 1, pto.si32)
+  pto.wait_flag("MTE3", "V", event_id=0)
+  pto.wait_flag("MTE3", "V", event_id=1)
+  pto.wait_flag("MTE3", "V", event_id=2)
+  pto.wait_flag("S", "MTE2", event_id=0)
+  pto.wait_flag("S", "MTE2", event_id=1)
+  pto.wait_flag("S", "MTE2", event_id=2)
+  pto.wait_flag("V", "MTE2", event_id=0)
+  pto.wait_flag("V", "MTE2", event_id=1)
+  pto.wait_flag("V", "MTE2", event_id=2)
