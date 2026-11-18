@@ -33,6 +33,7 @@ def store_kv_cache_tl(
     contiguous_slots: bool = True,
     skip_invalid_tiles: bool = True,
     use_reciprocal_lut: bool = True,
+    bf16_dma: bool = False,
     input_l2_cache_ctrl: str = "NOTALLOC_KEEP",
     rows_per_step: int = 1,
 ) -> Any:
@@ -49,6 +50,7 @@ def store_kv_cache_tl(
     assert block_size > 0
     if layout.quantized_dtype is None:
         assert layout.bf16_elements == layout.num_elements and layout.num_elements > 0
+        assert tokens_per_tile in (1, 2, 4, 8, 16, 32, 64)
         num_elements = layout.num_elements
         n = T.dynamic("n")
         num_blocks = T.dynamic("num_blocks")
@@ -56,7 +58,26 @@ def store_kv_cache_tl(
         block_stride = T.dynamic("block_stride", "int64")
         token_stride = T.dynamic("token_stride", "int64")
         num_cores = tile_kernels.get_num_vec_cores()
-        rows_per_tile = 16
+
+        if not bf16_dma:
+
+            @T.prim_func
+            def _store_bf16_cache_simt(
+                kv: T.StridedTensor((n, num_elements), (input_stride, 1), T.bfloat16),
+                cache: T.StridedTensor((num_blocks, block_size, num_elements), (block_stride, token_stride, 1), T.bfloat16),
+                slots: T.Tensor((n,), T.int32),
+            ):
+                with T.Kernel(num_cores) as core:
+                    for tile in T.Persistent([T.ceildiv(n, 16)], num_cores, core, group_size=1):
+                        with T.SimtVF(threads=256):
+                            for row, col in T.Parallel(16, num_elements):
+                                token = tile * 16 + row
+                                if token < n:
+                                    slot = slots[token]
+                                    if slot != -1:
+                                        cache[slot // block_size, slot % block_size, col] = kv[token, col]
+
+            return _store_bf16_cache_simt
 
         @T.prim_func
         def _store_bf16_cache(
@@ -65,14 +86,40 @@ def store_kv_cache_tl(
             slots: T.Tensor((n,), T.int32),
         ):
             with T.Kernel(num_cores) as core:
-                for tile in T.Persistent([T.ceildiv(n, rows_per_tile)], num_cores, core, group_size=1):
-                    with T.SimtVF(threads=256):
-                        for row, col in T.Parallel(rows_per_tile, num_elements):
-                            token = tile * rows_per_tile + row
-                            if token < n:
-                                slot = slots[token]
+                x_ub = T.alloc_shared((tokens_per_tile, num_elements), T.bfloat16)
+                slots_ub = T.alloc_shared((max(8, tokens_per_tile),), T.int32)
+                T.annotate_buffer_versions({x_ub: num_stages, slots_ub: num_stages})
+                for tile in T.Persistent(
+                    [T.ceildiv(n, tokens_per_tile)], num_cores, core, group_size=1, num_stages=num_stages
+                ):
+                    start = tile * tokens_per_tile
+                    active = T.min(tokens_per_tile, n - start)
+                    T.copy(slots[start : start + active], slots_ub[0:active])
+                    flags = T.alloc_var(T.int32, 2 if contiguous_slots else 0)
+                    first = slots_ub[0]
+                    if first == -1:
+                        flags = 0
+                    for row in T.serial(active):
+                        slot = slots_ub[row]
+                        if slot != -1:
+                            flags = flags | 1
+                        if contiguous_slots:
+                            if slot != first + row:
+                                flags = flags & 1
+                    if flags & 1 != 0:
+                        T.copy(kv[start : start + active, :], x_ub[0:active, :], l2_cache_ctrl=input_l2_cache_ctrl)
+                        if flags & 2 != 0 and block_size >= tokens_per_tile:
+                            block = first // block_size
+                            offset = first % block_size
+                            count = T.min(active, block_size - offset)
+                            T.copy(x_ub[0:count, :], cache[block, offset : offset + count, :])
+                            if count < active:
+                                T.copy(x_ub[count:active, :], cache[block + 1, 0 : active - count, :])
+                        else:
+                            for row in T.serial(active):
+                                slot = slots_ub[row]
                                 if slot != -1:
-                                    cache[slot // block_size, slot % block_size, col] = kv[token, col]
+                                    T.copy(x_ub[row : row + 1, :], cache[slot // block_size, slot % block_size : slot % block_size + 1, :])
 
         return _store_bf16_cache
 

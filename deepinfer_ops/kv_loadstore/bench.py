@@ -78,6 +78,7 @@ class Prepared:
     io_bytes: int
     asc_kernel: Any = None
     pto_kernel: Any = None
+    asc_matched_fn: Callable[[], None] | None = None
 
 
 def _device() -> torch.device:
@@ -281,33 +282,49 @@ def prepare_store(case: Case, pto_kwargs: dict) -> Prepared:
         asc_storage, asc_cache = _guarded_store_cache(
             layout, num_blocks, case.block_size, case.pattern, device
         )
+        matched_storage, matched_cache = _guarded_store_cache(
+            layout, num_blocks, case.block_size, case.pattern, device
+        )
         pto_storage, pto_cache = _guarded_store_cache(
             layout, num_blocks, case.block_size, case.pattern, device
         )
+        matched_storage.copy_(asc_storage)
         pto_storage.copy_(asc_storage)
     elif layout.quantized_dtype is None:
         base = torch.zeros(num_blocks, case.block_size, layout.num_elements, dtype=torch.bfloat16, device=device)
-        asc_cache, pto_cache = base.clone(), base.clone()
-        asc_storage = pto_storage = None
+        asc_cache, matched_cache, pto_cache = base.clone(), base.clone(), base.clone()
+        asc_storage = matched_storage = pto_storage = None
     else:
         base, block_stride = _paged_storage(layout, num_blocks, case.block_size, device)
         base.zero_()
-        asc_storage, pto_storage = base.clone(), base.clone()
+        asc_storage, matched_storage, pto_storage = base.clone(), base.clone(), base.clone()
         asc_cache = _cache_view(asc_storage, block_stride, case.block_size, layout)
+        matched_cache = _cache_view(matched_storage, block_stride, case.block_size, layout)
         pto_cache = _cache_view(pto_storage, block_stride, case.block_size, layout)
+    matched_kwargs = {"tokens_per_tile": pto_kwargs.get("tokens_per_tile", 16)}
+    if layout.quantized_dtype is None:
+        matched_kwargs["bf16_dma"] = True
+    for key in ("num_stages", "contiguous_slots", "skip_invalid_tiles", "input_l2_cache_ctrl"):
+        if key in pto_kwargs:
+            matched_kwargs[key] = pto_kwargs[key]
     asc_kernel = store_asc(layout, case.block_size)
+    asc_matched_kernel = store_asc(layout, case.block_size, **matched_kwargs)
     pto_kernel = store_pto(layout, case.block_size, **pto_kwargs)
     asc_fn = _launch(asc_kernel, (kv, asc_cache, slots))
+    asc_matched_fn = _launch(asc_matched_kernel, (kv, matched_cache, slots))
     pto_fn = _launch(pto_kernel, (kv, pto_cache, slots))
     asc_fn()
+    asc_matched_fn()
     pto_fn()
     torch.npu.synchronize()
 
     def compare() -> None:
         if asc_storage is not None:
-            _compare_exact("kv_cache_backing", asc_storage, pto_storage)
+            _compare_exact("kv_cache_backing/asc_matched", asc_storage, matched_storage)
+            _compare_exact("kv_cache_backing/pto", asc_storage, pto_storage)
         else:
-            _compare_exact("kv_cache", asc_cache, pto_cache)
+            _compare_exact("kv_cache/asc_matched", asc_cache, matched_cache)
+            _compare_exact("kv_cache/pto", asc_cache, pto_cache)
 
     if guarded:
         kv.mul_(-2.0).add_(0.125)
@@ -323,16 +340,26 @@ def prepare_store(case: Case, pto_kwargs: dict) -> Prepared:
             finite = bits.to(torch.uint16).view(torch.bfloat16).reshape(128, 512)
             kv[:128].copy_(finite.to(device))
         asc_fn()
+        asc_matched_fn()
         pto_fn()
         torch.npu.synchronize()
         compare()
         kv.zero_()
         asc_fn()
+        asc_matched_fn()
         pto_fn()
         torch.npu.synchronize()
         compare()
 
-    return Prepared(asc_fn, pto_fn, compare, kv.nbytes + asc_cache.nbytes + slots.nbytes, asc_kernel, pto_kernel)
+    return Prepared(
+        asc_fn=asc_fn,
+        pto_fn=pto_fn,
+        compare=compare,
+        io_bytes=kv.nbytes + asc_cache.nbytes + slots.nbytes,
+        asc_kernel=asc_kernel,
+        pto_kernel=pto_kernel,
+        asc_matched_fn=asc_matched_fn,
+    )
 
 
 def prepare_load(case: Case, pto_kwargs: dict) -> Prepared:
@@ -344,12 +371,19 @@ def prepare_load(case: Case, pto_kwargs: dict) -> Prepared:
     if layout.quantized_dtype is None:
         cache = torch.randn(num_blocks, case.block_size, layout.num_elements, dtype=torch.bfloat16, device=device)
         asc_out = torch.empty(case.tokens, layout.num_elements, dtype=torch.bfloat16, device=device)
+        matched_out = torch.empty_like(asc_out)
         pto_out = torch.empty_like(asc_out)
         asc_kernel = load_asc(layout, case.block_size)
+        asc_matched_kernel = load_asc(layout, case.block_size)
         pto_kernel = load_pto(layout, case.block_size, **pto_kwargs)
         asc_fn = _launch(asc_kernel, (segments, asc_out, asc_out, cache, cache))
+        asc_matched_fn = _launch(asc_matched_kernel, (segments, matched_out, matched_out, cache, cache))
         pto_fn = _launch(pto_kernel, (segments, pto_out, pto_out, cache, cache))
-        compared = lambda: _compare_exact("kv", asc_out, pto_out)
+
+        def compared() -> None:
+            _compare_exact("kv/asc_matched", asc_out, matched_out)
+            _compare_exact("kv/pto", asc_out, pto_out)
+
         io_bytes = cache.nbytes + asc_out.nbytes + segments.nbytes
     else:
         storage, block_stride = _paged_storage(layout, num_blocks, case.block_size, device)
@@ -364,36 +398,63 @@ def prepare_load(case: Case, pto_kwargs: dict) -> Prepared:
             }
         if not layout.do_cast:
             kwargs["index_batch_size"] = 4 if case.tokens >= 16384 and case.pattern != "short" else 1
+        matched_kwargs = dict(kwargs)
+        if layout.do_cast:
+            matched_kwargs["cast_tile_multiple"] = 4
+        for key in ("index_batch_size", "index_num_stages"):
+            if key in pto_kwargs:
+                matched_kwargs[key] = pto_kwargs[key]
         asc_kernel = load_asc(layout, case.block_size, **kwargs)
+        asc_matched_kernel = load_asc(layout, case.block_size, **matched_kwargs)
         pto_kernel = load_pto(layout, case.block_size, **{**kwargs, **pto_kwargs})
         if layout.do_cast:
             asc_out = torch.empty(case.tokens, layout.num_elements, dtype=torch.bfloat16, device=device)
+            matched_out = torch.empty_like(asc_out)
             pto_out = torch.empty_like(asc_out)
             asc_args = (segments, asc_out, asc_out, data, sf)
+            matched_args = (segments, matched_out, matched_out, data, sf)
             pto_args = (segments, pto_out, pto_out, data, sf)
-            compared = lambda: _compare_dequant("kv", asc_out, pto_out)
+
+            def compared() -> None:
+                _compare_dequant("kv/asc_matched", asc_out, matched_out)
+                _compare_dequant("kv/pto", asc_out, pto_out)
         else:
             out_dtype = torch.int8 if layout.quantized_dtype == "e2m1" else torch.float8_e4m3fn
             asc_out = torch.empty(case.tokens, layout.quantized_bytes, dtype=out_dtype, device=device)
+            matched_out = torch.empty_like(asc_out)
             pto_out = torch.empty_like(asc_out)
             asc_sf = torch.empty(case.tokens, dtype=torch.int32, device=device)
+            matched_sf = torch.empty_like(asc_sf)
             pto_sf = torch.empty_like(asc_sf)
             asc_args = (segments, asc_out, asc_sf, data, sf)
+            matched_args = (segments, matched_out, matched_sf, data, sf)
             pto_args = (segments, pto_out, pto_sf, data, sf)
 
             def compared() -> None:
-                _compare_exact("kv", asc_out, pto_out)
-                _compare_exact("kv_sf", asc_sf, pto_sf)
+                _compare_exact("kv/asc_matched", asc_out, matched_out)
+                _compare_exact("kv_sf/asc_matched", asc_sf, matched_sf)
+                _compare_exact("kv/pto", asc_out, pto_out)
+                _compare_exact("kv_sf/pto", asc_sf, pto_sf)
 
         asc_fn = _launch(asc_kernel, asc_args)
+        asc_matched_fn = _launch(asc_matched_kernel, matched_args)
         pto_fn = _launch(pto_kernel, pto_args)
         io_bytes = data.nbytes + sf.nbytes + asc_out.nbytes + segments.nbytes
         if not layout.do_cast:
             io_bytes += asc_sf.nbytes
     asc_fn()
+    asc_matched_fn()
     pto_fn()
     torch.npu.synchronize()
-    return Prepared(asc_fn, pto_fn, compared, io_bytes, asc_kernel, pto_kernel)
+    return Prepared(
+        asc_fn=asc_fn,
+        pto_fn=pto_fn,
+        compare=compared,
+        io_bytes=io_bytes,
+        asc_kernel=asc_kernel,
+        pto_kernel=pto_kernel,
+        asc_matched_fn=asc_matched_fn,
+    )
 
 
 def prepare(case: Case, pto_kwargs: dict) -> Prepared:
@@ -571,24 +632,37 @@ def main() -> None:
         if not args.correctness_only:
             if args.detail:
                 asc_profile = _time(prepared.asc_fn, device, args.repeat, detail=True)
+                matched_profile = _time(prepared.asc_matched_fn, device, args.repeat, detail=True)
                 pto_profile = _time(prepared.pto_fn, device, args.repeat, detail=True)
                 row["asc_profile"] = asc_profile.__dict__
+                row["asc_matched_profile"] = matched_profile.__dict__
                 row["pto_profile"] = pto_profile.__dict__
                 asc_us = asc_profile.dur_us
+                matched_us = matched_profile.dur_us
                 pto_us = pto_profile.dur_us
-                print(f"ASC {asc_profile}", flush=True)
+                print(f"ASC original {asc_profile}", flush=True)
+                print(f"ASC matched {matched_profile}", flush=True)
                 print(f"PTO {pto_profile}", flush=True)
             else:
                 asc_us = _time(prepared.asc_fn, device, args.repeat) * 1000.0
+                matched_us = _time(prepared.asc_matched_fn, device, args.repeat) * 1000.0
                 pto_us = _time(prepared.pto_fn, device, args.repeat) * 1000.0
             row.update(
                 asc_us=asc_us,
+                asc_matched_us=matched_us,
                 pto_us=pto_us,
-                ratio=asc_us / pto_us,
+                ratio=matched_us / pto_us,
+                original_ratio=asc_us / pto_us,
+                non_vf_ratio=asc_us / matched_us,
                 asc_gbs=prepared.io_bytes / asc_us / 1e3,
+                asc_matched_gbs=prepared.io_bytes / matched_us / 1e3,
                 pto_gbs=prepared.io_bytes / pto_us / 1e3,
             )
-            print(f"OK asc={asc_us:.2f}us pto={pto_us:.2f}us ratio={asc_us / pto_us:.3f}", flush=True)
+            print(
+                f"OK asc={asc_us:.2f}us matched={matched_us:.2f}us pto={pto_us:.2f}us "
+                f"vf_ratio={matched_us / pto_us:.3f} non_vf={asc_us / matched_us:.3f}",
+                flush=True,
+            )
         else:
             print("OK correctness", flush=True)
         args.results.parent.mkdir(parents=True, exist_ok=True)

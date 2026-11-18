@@ -25,6 +25,8 @@ def main() -> None:
     if len(perf) != 62 or len(correctness) != 94:
         raise SystemExit(f"incomplete final matrix: {len(correctness)}/94 correctness, {len(perf)}/62 performance")
     counts = Counter(row["format"] for row in correctness)
+    if any("asc_matched_us" not in row or "non_vf_ratio" not in row for row in perf):
+        raise SystemExit("performance rows must include matched ASC and non-VF measurements")
     misses = [row for row in perf if row["ratio"] < 0.95]
 
     lines = [
@@ -41,7 +43,7 @@ def main() -> None:
         "- [tile-ai/tilelang `59f3924`](https://github.com/tile-ai/tilelang/tree/59f3924e85ea2f6d3ccec2f00c87044951a783f7), version `0.1.15+cpu.git59f3924e`.",
         "- `PTO_FLAGS=--pto-backend=vpto --pto-level=level3 --vmi-layout-max-frontier-entries=65536 --vmi-layout-max-transitions=262144 --enable-vecscope-mem-bar=false`.",
         "",
-        "`ratio = ASC_us / PTO_us`; greater than 1 means PTO is faster. Timing is the on-device msprof mean after five warmup launches, with 20 measured launches. A 256 MiB read-only reduction flushes L2 before each measured launch. The target is ratio >= 0.95.",
+        "The primary `ratio = matched_ASC_us / PTO_us`; greater than 1 means the PTO SimdVF rewrite is faster after matching non-VF work. `non_vf_ratio = original_ASC_us / matched_ASC_us` measures gains that ASC can also adopt. Timing is the on-device msprof mean after five warmup launches, with 20 measured launches. A 256 MiB read-only reduction flushes L2 before each measured launch. The target is ratio >= 0.95.",
         "",
         "## Files and reproduction",
         "",
@@ -50,6 +52,7 @@ def main() -> None:
         "- `kv_quant_pto.py`, `kv_quant_asc.py`: quantization helpers; `common.py`: cache layouts.",
         "- `bench.py`: correctness, profiling, and benchmark harness; `results/kv_loadstore.jsonl`: final raw rows.",
         "- `results/bf16_timing_verification.json`: independent cold/hot event, wall, and hardware-pipe cross-check for the BF16 store comparison.",
+        "- `results/fp8_matched_profile.jsonl`: original ASC, matched ASC, and PTO pipe profiles explaining the sequential FP8 VF-only result.",
         "",
         "Run from the worktree root with the provided CANN environment wrapper:",
         "",
@@ -72,21 +75,32 @@ def main() -> None:
         "",
         "Quantized stores and index loads are byte-exact against ASC. BF16 copies are exact. Main-cache dequantization uses the established `rtol=atol=2e-2`, `equal_nan=True` comparison. Guarded stores compare complete backing allocations, including untouched canaries and page gaps.",
         "",
+        "## Attribution methodology",
+        "",
+        "Each performance row measures three implementations: original DeepInfer ASC, ASC with matched non-VF work, and PTO. Matched ASC keeps its original `T.simd` arithmetic while adopting PTO's `T.copy` DMA, persistent/pipeline schedule, tile sizes, and scalar control flow where applicable. The primary ratio is therefore a VF-only comparison; the separate non-VF ratio measures the gain available to ASC without a VF rewrite.",
+        "",
+        "SimdVF-specific changes include register scale decode/broadcast, native-lane quantization, reciprocal evaluation, and row interleaving inside the vector scope. Non-VF changes include DMA, tile geometry, buffer stages, index batching, and slot/segment control flow. No hot-path speedup is attributed to SimtVF→SimdVF conversion: BF16 replaces SimtVF with non-VF DMA, and index zero-fill retains the same SimtVF operation on both sides.",
+        "",
         "## Effective optimizations",
         "",
-        "- **Load FP4:** decode 32 scales for four rows with one legal 128-byte load, convert once, and use register `vselr` expansion. This removes four per-row scale scratch stores, barriers, and grouped reloads per 128-value tile.",
-        "- **Load FP8:** decode each 16-byte scale row as two legal 8-lane halves, expand in registers, and select scales for 64-value chunks. This replaces pairs of scalar-byte loads, zips, and broadcast construction.",
-        "- **Store FP8:** process 64-value halves so grouped maxima and inverse scales stay in native 64-lane registers. No inverse UB spill or reload remains.",
-        "- **Store FP4:** exact compact hardware reciprocal is faster than the eight-entry select chain. Four rows share one inverse-store barrier per 128-value chunk; 16-row tiles reduce scheduling overhead while preserving legal 128-value FP4 packing.",
-        "- **Store BF16:** staged UB/DMA copies and contiguous page-run coalescing replace element-wise SIMT scatter. Random, invalid, and non-contiguous mappings retain a per-token fallback.",
-        "- **Index loads:** single-page tasks use a dedicated loop without unused merge/unit/part control flow. The block-32, 4096-token aligned FP4 case uses four-page batching. The block-64, 4096-token unaligned MXFP8 case uses one pipeline stage. Both non-default configurations are explicit in their result rows.",
-        "- **Random main-cache stores:** pipeline depth is tuned separately: FP8 uses four tokens per tile and FP4 uses eight. Sequential quantized stores and index caches retain 16-token tiles. The harness records the effective configuration in every raw and report row.",
+        "**VF-only rewrites:**",
+        "",
+        "- **Load FP4:** decode 32 scales for four rows with one legal 128-byte load, convert once, and use register `vselr` expansion. Matched ASC uses the same row tiling and pipeline.",
+        "- **Load FP8:** decode each 16-byte scale row as two legal 8-lane halves, expand in registers, and select scales for 64-value chunks. Matched ASC uses the same row tiling and pipeline.",
+        "- **Store FP8:** process 64-value halves so grouped maxima and inverse scales stay in native 64-lane registers, eliminating inverse UB spills.",
+        "- **Store FP4:** use exact compact hardware reciprocal and share one inverse-store barrier across four rows per 128-value chunk. ASC keeps its original LUT/vector body in the VF-only comparison.",
+        "",
+        "**Non-VF changes mirrored into matched ASC:**",
+        "",
+        "- **Store BF16:** staged UB/DMA copies and contiguous page-run coalescing replace direct SimtVF global-memory access. Random, invalid, and non-contiguous mappings retain a per-token fallback.",
+        "- **Store tiling:** sequential quantized stores use 16 tokens per tile; random main-cache FP8/FP4 use four/eight. Both matched ASC and PTO use the same tile and stage count.",
+        "- **Index loads:** single-page tasks use a dedicated loop without merge/unit/part control flow. Block-32, 4096-token aligned FP4 uses four-page batching on both sides; block-64, 4096-token unaligned MXFP8 uses one stage on both sides.",
         "",
         "Controlled compiler tests established the frontend constraints behind these forms: 16-lane VMI vectors and 32-lane packed-FP4 results are rejected; full-group loads require at least 32 bytes per group; direct grouped broadcast of a computed compact inverse fails VMI layout planning. The delivered paths compile under the standard flags above.",
         "",
         "## BF16 store timing verification",
         "",
-        "The vendored ASC BF16 source differs from DeepInfer `a679bb86` only in import paths. Independent NPU events reproduce the large sequential-store ratio; it is an algorithmic difference between direct SIMT global-memory access and staged DMA, not an async-launch timing artifact.",
+        "The original `bf16_dma=False` ASC path matches DeepInfer `a679bb86`; the file also provides `bf16_dma=True` as the matched non-VF variant. Independent NPU events reproduce the large original-ASC versus PTO sequential-store ratio; it is an algorithmic difference between direct SIMT global-memory access and staged DMA, not an async-launch timing artifact. This is a non-VF gain: matched ASC uses the same DMA path in the primary table.",
         "",
         "| timing method | ASC us | PTO us | ratio |",
         "|---|---:|---:|---:|",
@@ -106,19 +120,32 @@ def main() -> None:
     if misses:
         lines += ["Cases below target:", ""]
         for row in misses:
-            lines.append(f"- `{row['name']}` ratio {row['ratio']:.3f}. See raw row and optimization notes for the measured residual.")
+            if row["name"] in ("store/fp8_b64_n65536_sequential", "store/fp8_b133_n65536_sequential"):
+                reason = (
+                    "The native-half PTO VF path is slower. With identical non-VF work, matched ASC uses 7.24M AIV cycles "
+                    "and PTO uses 11.16M; both are 97-98% vector-pipe utilized. The earlier speedup comes from non-VF tiling, not SimdVF."
+                )
+            elif row["tokens"] <= 4096:
+                reason = (
+                    "This is a 2-4 us launch/metadata-bound case with matched non-VF work; the small measured residual is not "
+                    "presented as a SimdVF advantage or a hardware-bandwidth limitation."
+                )
+            else:
+                reason = "Non-VF work is matched; the residual is reported directly from the measured three-way row."
+            lines.append(f"- `{row['name']}` ratio {row['ratio']:.3f}. {reason}")
         lines.append("")
     else:
         lines += ["Every measured configuration meets or exceeds the 0.95 target.", ""]
     lines += [
-        "| operation | format | block | tokens | pattern | PTO config | ASC us | PTO us | ratio | PTO GB/s |",
-        "|---|---|---:|---:|---|---|---:|---:|---:|---:|",
+        "| operation | format | block | tokens | pattern | PTO config | original ASC us | matched ASC us | PTO us | VF-only ratio | non-VF gain |",
+        "|---|---|---:|---:|---|---|---:|---:|---:|---:|---:|",
     ]
     for row in perf:
         config = json.dumps(row["pto_kwargs"], sort_keys=True)
         lines.append(
             f"| {row['op']} | {row['format']} | {row['block_size']} | {row['tokens']} | {row['pattern']} | `{config}` "
-            f"| {row['asc_us']:.2f} | {row['pto_us']:.2f} | {row['ratio']:.3f} | {row['pto_gbs']:.1f} |"
+            f"| {row['asc_us']:.2f} | {row['asc_matched_us']:.2f} | {row['pto_us']:.2f} "
+            f"| {row['ratio']:.3f} | {row['non_vf_ratio']:.3f} |"
         )
     lines += [
         "",
