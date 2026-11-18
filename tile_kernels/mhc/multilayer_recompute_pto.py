@@ -6,9 +6,6 @@ _MIN_LANES = 64
 
 
 def _lanes(h_blk: int) -> int:
-    # 128 lanes beats 256 for this kernel: the fused body issues ~10 vector ops
-    # per column-group and 256 lanes doubles the per-op latency without helping
-    # (measured 0.880 vs 0.864 at h_blk=2560, 0.909 vs 0.898 at h_blk=2048).
     if h_blk % 128 == 0:
         return 128
     return _MIN_LANES
@@ -32,9 +29,6 @@ def mhc_multilayer_recompute_pto(
     num_vec_cores: int,
     num_post: int,
 ):
-    # ``num_post`` must equal ``len(post_mix_list)`` (i.e. ``L_post``). It is
-    # passed explicitly so the post-layer loop below can be unrolled at trace
-    # time; see the ``bufs`` comment for why that matters.
     num_tokens = T.dynamic('n')
     mhc = T.const('mhc')
     hidden = T.const('h')
@@ -54,12 +48,7 @@ def mhc_multilayer_recompute_pto(
     mhc_pad = T.ceildiv(mhc, 8) * 8  # TODO remove manual padding
 
     with T.Kernel(num_vec_cores) as core_id:
-        # Two *separate* residual buffers instead of one (2, mhc, h_blk) ping-pong
-        # tensor. With a dynamic slot index the aliasing between the loads and the
-        # stores of the same buffer is not provable, so PTOAS inserts a mem_bar per
-        # aliased access (25 per tile measured). Two static buffers make the
-        # ping-pong explicit and drop the barrier count to 0 (725.7 -> 235.6 us).
-        bufs = [T.alloc_shared((mhc, h_blk), T.bfloat16) for _ in range(2)]
+        residual_ub = [T.alloc_shared((mhc, h_blk), T.bfloat16) for _ in range(2)]
         layer_output_ub = T.alloc_shared((2, h_blk), T.bfloat16)
         layer_input_ub = T.alloc_shared((2, h_blk), T.bfloat16)
         pre_mix_ub = T.alloc_shared((2, mhc_pad), T.float32)
@@ -75,15 +64,15 @@ def mhc_multilayer_recompute_pto(
             T.ascend_set_flag('MTE3_V', 1)
 
             T.ascend_wait_flag('MTE3_MTE2', 0)
-            T.copy(initial_residual[pid_n, 0, pid_h * h_blk], bufs[0])
+            T.copy(initial_residual[pid_n, 0, pid_h * h_blk], residual_ub[0])
             T.ascend_set_flag('MTE2_V', 2)
             T.ascend_wait_flag('MTE2_V', 2)
 
             for l in list(range(num_post)):
                 input_slot = l % 2
                 output_slot = 1 - input_slot
-                in_buf = bufs[input_slot]
-                out_buf = bufs[output_slot]
+                in_buf = residual_ub[input_slot]
+                out_buf = residual_ub[output_slot]
                 pre_mix_tensor = T.make_tensor(pre_mix_ptrs[l], (num_tokens, mhc), T.float32)
                 post_mix_tensor = T.make_tensor(post_mix_ptrs[l], (num_tokens, mhc), T.float32)
                 comb_mix_tensor = T.make_tensor(comb_mix_ptrs[l], (num_tokens, mhc, mhc), T.float32)
@@ -106,9 +95,6 @@ def mhc_multilayer_recompute_pto(
                             T.cast(in_buf[mi, column], T.float32)
                             for mi in range(mhc)
                         ]
-                        # Weighted row sum, not a plain reduction: T.reduce_sum has no
-                        # per-row scale, so fold explicitly in the ASC/VMI chain order
-                        # (vmul init + vmula); see the PR body for the measurements.
                         layer_input_acc = res_terms[0] * pre_mix_ub[input_slot, 0]
                         for mi in list(range(1, mhc)):
                             layer_input_acc = layer_input_acc + res_terms[mi] * pre_mix_ub[input_slot, mi]
@@ -144,7 +130,7 @@ def mhc_multilayer_recompute_pto(
                 with T.SimdVF(lanes=lanes):
                     for column in T.Parallel(h_blk):
                         res_terms = [
-                            T.cast(bufs[num_post % 2][mi, column], T.float32)
+                            T.cast(residual_ub[num_post % 2][mi, column], T.float32)
                             for mi in range(mhc)
                         ]
                         layer_input_acc = res_terms[0] * pre_mix_ub[final_slot, 0]
