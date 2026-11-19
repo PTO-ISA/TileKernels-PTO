@@ -71,8 +71,8 @@ def mhc_multilayer_recompute_pto(
             for l in list(range(num_post)):
                 input_slot = l % 2
                 output_slot = 1 - input_slot
-                in_buf = residual_ub[input_slot]
-                out_buf = residual_ub[output_slot]
+                residual_in_ub = residual_ub[input_slot]
+                residual_out_ub = residual_ub[output_slot]
                 pre_mix_tensor = T.make_tensor(pre_mix_ptrs[l], (num_tokens, mhc), T.float32)
                 post_mix_tensor = T.make_tensor(post_mix_ptrs[l], (num_tokens, mhc), T.float32)
                 comb_mix_tensor = T.make_tensor(comb_mix_ptrs[l], (num_tokens, mhc, mhc), T.float32)
@@ -92,7 +92,7 @@ def mhc_multilayer_recompute_pto(
                 with T.SimdVF(lanes=lanes):
                     for column in T.Parallel(h_blk):
                         res_terms = [
-                            T.cast(in_buf[mi, column], T.float32)
+                            T.cast(residual_in_ub[mi, column], T.float32)
                             for mi in range(mhc)
                         ]
                         layer_input_acc = res_terms[0] * pre_mix_ub[input_slot, 0]
@@ -106,12 +106,12 @@ def mhc_multilayer_recompute_pto(
                             )
                             for term in [res_terms[mi] * comb_mix_ub[input_slot, mi, mo] for mi in range(mhc)]:
                                 out_acc = out_acc + term
-                            out_buf[mo, column] = T.cast(out_acc, T.bfloat16)
+                            residual_out_ub[mo, column] = T.cast(out_acc, T.bfloat16)
                 T.ascend_set_flag('V_MTE2', input_slot)
                 T.ascend_set_flag('V_MTE3', input_slot)
 
                 T.ascend_wait_flag('V_MTE3', input_slot)
-                T.copy(out_buf, residual_tensor[pid_n, 0, pid_h * h_blk])
+                T.copy(residual_out_ub, residual_tensor[pid_n, 0, pid_h * h_blk])
                 T.copy(layer_input_ub[input_slot, :], layer_input_tensor[pid_n, pid_h * h_blk])
                 T.ascend_set_flag('MTE3_V', output_slot)
 
@@ -120,6 +120,7 @@ def mhc_multilayer_recompute_pto(
             if num_layers > num_post_layers:
                 final_slot = num_post % 2
                 final_output_slot = 1 - final_slot
+                residual_final_ub = residual_ub[final_slot]
                 pre_mix_tensor = T.make_tensor(pre_mix_ptrs[num_post_layers], (num_tokens, mhc), T.float32)
                 layer_input_tensor = T.make_tensor(layer_input_ptrs[num_post_layers], (num_tokens, hidden), T.bfloat16)
                 T.ascend_wait_flag('V_MTE2', final_slot)
@@ -130,7 +131,7 @@ def mhc_multilayer_recompute_pto(
                 with T.SimdVF(lanes=lanes):
                     for column in T.Parallel(h_blk):
                         res_terms = [
-                            T.cast(residual_ub[num_post % 2][mi, column], T.float32)
+                            T.cast(residual_final_ub[mi, column], T.float32)
                             for mi in range(mhc)
                         ]
                         layer_input_acc = res_terms[0] * pre_mix_ub[final_slot, 0]
