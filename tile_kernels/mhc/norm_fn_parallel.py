@@ -100,13 +100,17 @@ def mhc_fn_normw_merge_bwd_parallel(
             T.copy(normw_grad[hidden_offset : hidden_offset + hidden_block], normw_grad_ub)
 
             with T.SimdVF(lanes=128):
-                # One pass over the gradient data per column: the serial row
-                # shell keeps the single-read of out_fn_grad shared between the
-                # fn_grad update and the per-column normw_grad accumulation.
-                for col in T.Parallel(hidden_block):
-                    for row in T.serial(mhc_mult3):
-                        fn_grad_ub[row, col] = fn_grad_ub[row, col] + out_fn_grad_ub[row, col] * normw_ub[col]
-                        normw_grad_ub[col] = normw_grad_ub[col] + out_fn_grad_ub[row, col] * fn_ub[row, col]
+                # Three full-bandwidth units, no accumulation shell:
+                # 1) turn fn_ub into the grad*fn product matrix in place (fn is
+                #    not read again afterwards),
+                # 2) fold the product rows into normw_grad (dim=0 reduce in
+                #    row-major order — the same per-row vadd chain as VMI),
+                # 3) elementwise fn_grad update.
+                for row, col in T.Parallel(mhc_mult3, hidden_block):
+                    fn_ub[row, col] = out_fn_grad_ub[row, col] * fn_ub[row, col]
+                T.reduce_sum(fn_ub, normw_grad_ub, dim=0, clear=False)
+                for row, col in T.Parallel(mhc_mult3, hidden_block):
+                    fn_grad_ub[row, col] = fn_grad_ub[row, col] + out_fn_grad_ub[row, col] * normw_ub[col]
 
             T.copy(fn_grad_ub, fn_grad[:mhc_mult3, hidden_offset : hidden_offset + hidden_block])
             T.copy(normw_grad_ub, normw_grad[hidden_offset : hidden_offset + hidden_block])
@@ -178,6 +182,12 @@ def mhc_reduce_partials_and_rmsnorm_fwd_parallel(
         acc_flat = T.Tensor((token_elems,), T.float32, data=acc_ub.data, scope='shared.dyn')
         mul_flat = T.Tensor((split_chunk, token_elems), T.float32, data=mul_ub.data, scope='shared.dyn')
         mul_out_flat = T.Tensor((token_elems,), T.float32, data=mul_out_ub.data, scope='shared.dyn')
+        # Logical views for the sqrsum accumulation: the 16 live token columns
+        # of the 64-padded sq rows, and the matching accumulator prefix.
+        sq_chunk_view = T.StridedTensor(
+            (split_chunk, token_block), (sq_pad64, 1), T.float32, data=sq_ub.data, scope='shared.dyn'
+        )
+        sq_acc_view = T.Tensor((token_block,), T.float32, data=sq_acc_ub.data, scope='shared.dyn')
 
         for block_id in T.Persistent([n_token_blocks], num_vec_cores, core_id, group_size=1, num_stages=num_stages):
             token_base = block_id * token_block
@@ -201,12 +211,12 @@ def mhc_reduce_partials_and_rmsnorm_fwd_parallel(
                 )
 
                 with T.SimdVF(lanes=64):
-                    for elem in T.Parallel(token_elems):
-                        for local_split in T.serial(split_chunk):
-                            acc_flat[elem] = acc_flat[elem] + mul_flat[local_split, elem]
-                    for token_idx in T.Parallel(token_block):
-                        for local_split in T.serial(split_chunk):
-                            sq_acc_ub[token_idx] = sq_acc_ub[token_idx] + sq_ub[local_split, token_idx]
+                    # Accumulate this chunk's partials into the running sums:
+                    # a dim=0 (elementwise, split-major order) reduce merged
+                    # into the existing accumulator matches the VMI per-split
+                    # vadd chain bitwise without a read-modify-write shell.
+                    T.reduce_sum(mul_flat, acc_flat, dim=0, clear=False)
+                    T.reduce_sum(sq_chunk_view, sq_acc_view, dim=0, clear=False)
 
             with T.SimdVF(lanes=64):
                 for lane in T.Parallel(64):
@@ -285,6 +295,14 @@ def mhc_reduce_partials_and_rmsnorm_bwd_parallel(
         )
         row_sum_view = T.Tensor((token_block,), T.float32, data=sqrsum_grad_compact_ub.data, scope='shared.dyn')
         rms_stage = T.Tensor((token_block,), T.float32, data=sqrsum_grad_ub.data, scope='shared.dyn')
+        # Full-pitch flat views (16 x 32 = 512 contiguous words) let the
+        # product pass run full 64-lane rows; the padded columns compute
+        # garbage that is never reduced (the reduce view selects the 24 live
+        # columns) and never copied out.
+        pad_elems = token_block * mhc_mult3_pad32
+        out_grad_flat = T.Tensor((pad_elems,), T.float32, data=out_grad_ub.data, scope='shared.dyn')
+        out_mul_flat = T.Tensor((pad_elems,), T.float32, data=out_mul_ub.data, scope='shared.dyn')
+        grad_mul_flat = T.Tensor((pad_elems,), T.float32, data=out_mul_grad_ub.data, scope='shared.dyn')
 
         for block_id in T.Persistent([n_token_blocks], num_vec_cores, core_id, group_size=1, num_stages=num_stages):
             token_base = block_id * token_block
@@ -294,11 +312,12 @@ def mhc_reduce_partials_and_rmsnorm_bwd_parallel(
                 T.copy(sqrsum[token_base : token_base + token_block, 0], sqrsum_ub[:token_block])
 
                 with T.SimdVF(lanes=64):
-                    # Stage grad*out_mul in the out_mul_grad rows, reduce each
-                    # token row to its rms_grad sum, then overwrite the rows
-                    # with the real out_mul_grad payload.
-                    for token_idx, elem in T.Parallel(token_block, mhc_mult3):
-                        grad_mul_view[token_idx, elem] = out_grad_ub[token_idx, elem] * out_mul_ub[token_idx, elem]
+                    # Stage grad*out_mul in the out_mul_grad rows (full-pitch
+                    # flat pass, full lanes), reduce each token row to its
+                    # rms_grad sum, then overwrite the rows with the real
+                    # out_mul_grad payload.
+                    for elem in T.Parallel(token_block * mhc_mult3_pad32):
+                        grad_mul_flat[elem] = out_grad_flat[elem] * out_mul_flat[elem]
                     T.reduce_sum(grad_mul_view, row_sum_view, dim=1)
                     for token_idx in T.Parallel(token_block):
                         rms_stage[token_idx] = T.float32(1.0) / T.sqrt(
