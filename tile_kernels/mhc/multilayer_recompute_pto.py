@@ -27,7 +27,6 @@ def mhc_multilayer_recompute_pto(
     residual_ptrs,
     h_blk: int,
     num_vec_cores: int,
-    num_post: int,
 ):
     num_tokens = T.dynamic('n')
     mhc = T.const('mhc')
@@ -48,7 +47,7 @@ def mhc_multilayer_recompute_pto(
     mhc_pad = T.ceildiv(mhc, 8) * 8  # TODO remove manual padding
 
     with T.Kernel(num_vec_cores) as core_id:
-        residual_ub = [T.alloc_shared((mhc, h_blk), T.bfloat16) for _ in range(2)]
+        residual_ub = T.alloc_shared((2, mhc, h_blk), T.bfloat16)
         layer_output_ub = T.alloc_shared((2, h_blk), T.bfloat16)
         layer_input_ub = T.alloc_shared((2, h_blk), T.bfloat16)
         pre_mix_ub = T.alloc_shared((2, mhc_pad), T.float32)
@@ -64,15 +63,13 @@ def mhc_multilayer_recompute_pto(
             T.ascend_set_flag('MTE3_V', 1)
 
             T.ascend_wait_flag('MTE3_MTE2', 0)
-            T.copy(initial_residual[pid_n, 0, pid_h * h_blk], residual_ub[0])
+            T.copy(initial_residual[pid_n, 0, pid_h * h_blk], residual_ub[0, :, :])
             T.ascend_set_flag('MTE2_V', 2)
             T.ascend_wait_flag('MTE2_V', 2)
 
-            for l in list(range(num_post)):
+            for l in T.serial(num_post_layers):
                 input_slot = l % 2
                 output_slot = 1 - input_slot
-                residual_in_ub = residual_ub[input_slot]
-                residual_out_ub = residual_ub[output_slot]
                 pre_mix_tensor = T.make_tensor(pre_mix_ptrs[l], (num_tokens, mhc), T.float32)
                 post_mix_tensor = T.make_tensor(post_mix_ptrs[l], (num_tokens, mhc), T.float32)
                 comb_mix_tensor = T.make_tensor(comb_mix_ptrs[l], (num_tokens, mhc, mhc), T.float32)
@@ -90,37 +87,32 @@ def mhc_multilayer_recompute_pto(
                 T.ascend_wait_flag('MTE2_V', input_slot)
                 T.ascend_wait_flag('MTE3_V', output_slot)
                 with T.SimdVF(lanes=lanes):
-                    for column in T.Parallel(h_blk):
-                        res_terms = [
-                            T.cast(residual_in_ub[mi, column], T.float32)
-                            for mi in range(mhc)
-                        ]
-                        layer_input_acc = res_terms[0] * pre_mix_ub[input_slot, 0]
+                    for column_offset in T.Parallel(h_blk):
+                        residual = [T.cast(residual_ub[input_slot, 0, column_offset], T.float32)]
+                        layer_input = residual[0] * pre_mix_ub[input_slot, 0]
                         for mi in list(range(1, mhc)):
-                            layer_input_acc = layer_input_acc + res_terms[mi] * pre_mix_ub[input_slot, mi]
-                        layer_input_ub[input_slot, column] = T.cast(layer_input_acc, T.bfloat16)
+                            residual.append(T.cast(residual_ub[input_slot, mi, column_offset], T.float32))
+                            layer_input = layer_input + residual[mi] * pre_mix_ub[input_slot, mi]
+                        layer_input_ub[input_slot, column_offset] = T.cast(layer_input, T.bfloat16)
+                        layer_output = T.cast(layer_output_ub[input_slot, column_offset], T.float32)
                         for mo in list(range(mhc)):
-                            out_acc = (
-                                T.cast(layer_output_ub[input_slot, column], T.float32)
-                                * post_mix_ub[input_slot, mo]
-                            )
-                            for term in [res_terms[mi] * comb_mix_ub[input_slot, mi, mo] for mi in range(mhc)]:
-                                out_acc = out_acc + term
-                            residual_out_ub[mo, column] = T.cast(out_acc, T.bfloat16)
+                            output = layer_output * post_mix_ub[input_slot, mo]
+                            for mi in list(range(mhc)):
+                                output = output + residual[mi] * comb_mix_ub[input_slot, mi, mo]
+                            residual_ub[output_slot, mo, column_offset] = T.cast(output, T.bfloat16)
                 T.ascend_set_flag('V_MTE2', input_slot)
                 T.ascend_set_flag('V_MTE3', input_slot)
 
                 T.ascend_wait_flag('V_MTE3', input_slot)
-                T.copy(residual_out_ub, residual_tensor[pid_n, 0, pid_h * h_blk])
+                T.copy(residual_ub[output_slot, :, :], residual_tensor[pid_n, 0, pid_h * h_blk])
                 T.copy(layer_input_ub[input_slot, :], layer_input_tensor[pid_n, pid_h * h_blk])
                 T.ascend_set_flag('MTE3_V', output_slot)
 
             T.ascend_set_flag('MTE3_MTE2', 0)
 
             if num_layers > num_post_layers:
-                final_slot = num_post % 2
+                final_slot = num_post_layers % 2
                 final_output_slot = 1 - final_slot
-                residual_final_ub = residual_ub[final_slot]
                 pre_mix_tensor = T.make_tensor(pre_mix_ptrs[num_post_layers], (num_tokens, mhc), T.float32)
                 layer_input_tensor = T.make_tensor(layer_input_ptrs[num_post_layers], (num_tokens, hidden), T.bfloat16)
                 T.ascend_wait_flag('V_MTE2', final_slot)
@@ -129,15 +121,13 @@ def mhc_multilayer_recompute_pto(
                 T.ascend_wait_flag('MTE2_V', final_slot)
                 T.ascend_wait_flag('MTE3_V', final_output_slot)
                 with T.SimdVF(lanes=lanes):
-                    for column in T.Parallel(h_blk):
-                        res_terms = [
-                            T.cast(residual_final_ub[mi, column], T.float32)
-                            for mi in range(mhc)
-                        ]
-                        layer_input_acc = res_terms[0] * pre_mix_ub[final_slot, 0]
+                    for column_offset in T.Parallel(h_blk):
+                        residual = [T.cast(residual_ub[final_slot, 0, column_offset], T.float32)]
+                        layer_input = residual[0] * pre_mix_ub[final_slot, 0]
                         for mi in list(range(1, mhc)):
-                            layer_input_acc = layer_input_acc + res_terms[mi] * pre_mix_ub[final_slot, mi]
-                        layer_input_ub[final_slot, column] = T.cast(layer_input_acc, T.bfloat16)
+                            residual.append(T.cast(residual_ub[final_slot, mi, column_offset], T.float32))
+                            layer_input = layer_input + residual[mi] * pre_mix_ub[final_slot, mi]
+                        layer_input_ub[final_slot, column_offset] = T.cast(layer_input, T.bfloat16)
                 T.ascend_set_flag('V_MTE2', final_slot)
                 T.ascend_set_flag('V_MTE3', final_slot)
                 T.ascend_wait_flag('V_MTE3', final_slot)
