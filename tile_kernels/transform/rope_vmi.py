@@ -36,6 +36,8 @@ def get_rope_kernel_vmi(
     block_tokens = 1 << (ub_block_tokens.bit_length() - 1)
     can_bulk_copy = x_stride_0 == nheads * x_stride_1 or x_stride_1 == rotary_dim
 
+    # The explicit store descriptor covers one extra vector at the final head pair.
+    native_pair = dtype == T.bfloat16 and interleaved and not can_bulk_copy and rotary_dim == SIMD_LANES and nheads == 32
     batch = T.dynamic('batch')
     seqlen = T.dynamic('seqlen')
     seqlen_ro = T.dynamic('seqlen_ro')
@@ -100,7 +102,7 @@ def get_rope_kernel_vmi(
     ) -> None:
         T.assume(seqlen > 0)
         with T.Kernel(num_vec_cores) as core:
-            x_ub = T.alloc_shared((block_tokens, nheads, rotary_dim), dtype)
+            x_ub = T.alloc_shared((block_tokens + int(native_pair), nheads, rotary_dim), dtype)
             cos_sin_ub = T.alloc_shared((block_tokens, rotary_dim), T.float32)
             T.annotate_buffer_versions({x_ub: num_stages, cos_sin_ub: num_stages})
 
@@ -145,11 +147,20 @@ def get_rope_kernel_vmi(
                         if rotary_dim == SIMD_LANES:
                             for pair in range(nheads // 2):
                                 head = pair * 2
-                                first, second = load2(x_ub, row, head, 0, head + 1, 0)
-                                first, second = V.vdintlv(first, second, mask) if interleaved else V.vintlv(first, second, mask)
-                                first, second = rotate(first, second, cosine, sine, neg_sine)
-                                first, second = V.vintlv(first, second, mask) if interleaved else V.vdintlv(first, second, mask)
-                                store2(x_ub, row, head, 0, head + 1, 0, first, second, True)
+                                if native_pair:
+                                    packed = V.vload(x_ub[row, head, 0], size=2 * SIMD_LANES)
+                                    even, odd = V.vunzip(V.vinterpret_cast(packed, 'uint32'), 'bfloat16')
+                                    first, second = rotate(V.vcvt(even, 'float32'), V.vcvt(odd, 'float32'), cosine, sine, neg_sine)
+                                    first, second = V.vintlv(first, second, mask)
+                                    dst = T.access_ptr(x_ub[row, head, 0], 'w', extent=3 * SIMD_LANES)
+                                    V.vstore(V.vcvt(first, 'bfloat16'), dst, 0)
+                                    V.vstore(V.vcvt(second, 'bfloat16'), dst, SIMD_LANES)
+                                else:
+                                    first, second = load2(x_ub, row, head, 0, head + 1, 0)
+                                    first, second = V.vdintlv(first, second, mask) if interleaved else V.vintlv(first, second, mask)
+                                    first, second = rotate(first, second, cosine, sine, neg_sine)
+                                    first, second = V.vintlv(first, second, mask) if interleaved else V.vdintlv(first, second, mask)
+                                    store2(x_ub, row, head, 0, head + 1, 0, first, second, True)
                             if nheads % 2:
                                 odd_head = nheads - 1
                                 first, second = load2(x_ub, row, odd_head, 0, odd_head, 0)
