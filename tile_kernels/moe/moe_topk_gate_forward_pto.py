@@ -1,21 +1,3 @@
-"""MoE top-k gate forward with the sqrt(softplus) score block in T.Parallel (PTO).
-
-Port of `moe_topk_gate_forward_vmi.py`: same ABI, same tiling / `T.copy` traffic /
-`T.Persistent` schedule / buffer versions, same `T.SimtVF` top-k section.  Only the
-`with T.SimdVF()` score block is a `T.Parallel(block_m, num_aligned_experts)` region
-calling `sqrt_softplus_forward_pto`, which is why it needs
-  * `mode='iteration'` buffer versions (a Parallel unit cannot take the auto counter),
-  * no token-bound predicate inside the unit: `row_start` comes from `T.ceildiv`
-    (a FloorDiv the unit cannot contain) and the tail rows it would guard are dead
-    anyway (never copied out, never read by the top-k section), so the unit applies
-    only the mask / force_random flags, exactly like that section;
-  * `-float('inf')` instead of `-T.infinity(T.float32)` (that call carries the dtype
-    as a string, which the Parallel value analysis refuses).
-
-Not ported: the `invalid` accumulator (NaN/Inf input + bad fixed-routing index).  It
-only feeds the trailing `T.device_assert`, so it stays zero here.
-"""
-
 import tilelang
 from tilelang.ascend import language as T
 from tilelang.ascend.language import vmi as V
@@ -101,8 +83,6 @@ def get_moe_topk_gate_forward_kernel_pto(
             invalid_logits_ub = T.alloc_shared((vector_length,), T.int32)
             topk_idx_view = T.view(topk_idx, (num_tokens, num_physical_topk * 2), T.int32)
             unmapped_idx_view = T.view(unmapped_topk_idx, (num_tokens, num_topk * 2), T.int32, (unmapped_topk_idx_stride * 2, 1))
-            # The Parallel unit reads/writes these buffers, so the version selector
-            # must stay an affine indexmod ("iteration"), not the auto counter.
             versions = {scores_w_bias_ub: (num_stages, 'iteration'), scores_wo_bias_ub: (num_stages, 'iteration'),
                         out_idx_ub: num_stages, out_weight_ub: num_stages, invalid_logits_ub: 1}
             outputs = [scores_wo_bias_ub, out_idx_ub, out_weight_ub]
@@ -123,6 +103,8 @@ def get_moe_topk_gate_forward_kernel_pto(
                 T.copy(logical_count, count_ub[:num_logical_experts])
                 T.copy(to_physical_map, map_ub)
                 if force_random_exists:
+                    # needs a row-level sum; T.reduce_sum on shared buffers is not
+                    # lowered yet, so this stays a VMI reduction
                     with T.SimdVF():
                         full = V.create_mask(vector_length, size=vector_length)
                         zeros = V.vbrc(T.int32(0), size=vector_length)
@@ -136,13 +118,14 @@ def get_moe_topk_gate_forward_kernel_pto(
             if bias_exists:
                 T.copy(bias, bias_ub[0, :num_routed_experts])
             elif image_token_mask_exists:
-                with T.SimdVF():
-                    for j in T.unroll(num_vregs, explicit=True):
-                        V.vstore(V.vbrc(T.float32(0.0), size=vector_length), bias_ub[0, j * vector_length])
+                with T.SimdVF(lanes=128):
+                    for j in T.Parallel(num_aligned_experts):
+                        bias_ub[0, j] = 0.0
             if image_token_mask_exists:
                 T.copy(image_bias, bias_ub[1, :num_routed_experts])
-            with T.SimdVF():
-                V.vstore(V.vbrc(T.int32(0), size=vector_length), invalid_logits_ub[0])
+            with T.SimdVF(lanes=128):
+                for j in T.Parallel(vector_length):
+                    invalid_logits_ub[j] = 0
             num_rows = T.min(block_m, T.max(1, T.ceildiv(num_tokens, num_vec_cores)))
             for tile_id in T.Persistent([T.ceildiv(num_tokens, num_rows)], num_vec_cores, core_id,
                                         num_stages=num_stages, annotations={'multi_buffer_eligible': outputs}):
