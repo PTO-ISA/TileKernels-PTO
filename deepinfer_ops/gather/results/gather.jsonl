@@ -1,0 +1,7 @@
+{"impl": "asc", "style": "parallel", "device": 0, "us": 44.6724, "correct": true, "m": 131072, "n": 131072, "logical_d": 128, "kernel_d": 512}
+{"impl": "asc", "style": "simd", "device": 0, "us": 44.334900000000005, "correct": true, "asc_us": 44.6724, "ratio_vs_parallel": 0.9924449995970667, "m": 131072, "n": 131072, "logical_d": 128, "kernel_d": 512}
+{"impl": "pto", "style": "single", "device": 0, "us": 65.5694, "asc_us": 44.6724, "ratio": 0.6812995086122491, "correct": true, "ptoas_version": "ptoas 0.72", "m": 131072, "n": 131072, "logical_d": 128, "kernel_d": 512}
+{"impl": "pto", "style": "double", "device": 0, "us": 47.9999, "asc_us": 44.6724, "ratio": 0.9306769389102896, "correct": true, "ptoas_version": "ptoas 0.72", "m": 131072, "n": 131072, "logical_d": 128, "kernel_d": 512}
+{"impl": "asc", "style": "parallel", "device": 0, "us": 44.8014, "correct": true, "m": 131072, "n": 131072, "logical_d": 128, "kernel_d": 512}
+{"impl": "asc", "style": "simd", "device": 0, "us": 44.499900000000004, "correct": true, "asc_us": 44.8014, "ratio_vs_parallel": 0.9932702995888522, "m": 131072, "n": 131072, "logical_d": 128, "kernel_d": 512}
+{"impl": "pto", "style": "patched", "device": 0, "us": 48.8164, "asc_us": 44.8014, "ratio": 0.9177530502044395, "correct": true, "ptoas_version": "ptoas 0.72 + invariant-symbol cancellation", "m": 131072, "n": 131072, "logical_d": 128, "kernel_d": 512}
