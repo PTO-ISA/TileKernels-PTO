@@ -151,11 +151,12 @@ def get_moe_topk_gate_forward_kernel_pto(
                             active = not force_random_ub[row]
                         else:
                             active = True
-                        logit = T.Select(valid and active, scores_w_bias_ub[row, col], 0.0)
-                        score = sqrt_softplus_forward_pto(logit)
+                        logit = scores_w_bias_ub[row, col]
                         if mask_exists or force_random_exists:
-                            score = T.Select(active, score, 0.0)
-                        score = T.Select(valid, score, 0.0)
+                            # Inactive rows must leave a zero score behind.  sqrt(softplus(-inf))
+                            # is exactly 0 on both branches, so masking the input is enough.
+                            logit = T.Select(active, logit, -float("inf"))
+                        score = sqrt_softplus_forward_pto(logit)
                         # Bias affects expert selection only; normalization uses the original scores.
                         scores_wo_bias_ub[row, col] = score
                         if image_token_mask_exists:
